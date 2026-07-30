@@ -1,0 +1,11 @@
+services:
+  server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./server/config.toml:/app/server/config.toml:ro
+    environment:
+      - MAPCONTROL_DB_PATH=/app/data/mapcontrol.db
+      - MAPCONTROL_FILE_DIR=/app/data/files

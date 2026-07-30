@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mapcontrol-server"
+version = "0.1.0"
+description = "FastAPI proxy server for the Map Control system"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=13.0",
+    "aiosqlite>=0.20.0",
+    "httpx>=0.27.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "pydantic>=2.0.0",
+    "rasterio>=1.3.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "Pillow>=10.0.0",
+    "python-multipart>=0.0.6",
+    "playwright>=1.40.0",
+    # MCP layer (Phase 0, docs/vision/mcp-compliance-roadmap.md): official MCP Python
+    # SDK (bundles FastMCP + Streamable HTTP), mounted in-process at /mcp.
+    # Pinned <2: mcp 2.0.0 (2026-07) removed mcp.server.fastmcp (FastMCP
+    # moved out of the SDK), which breaks mcp_tools.py at import. Revisit
+    # when migrating to the 2.x server API.
+    "mcp>=1.28.0,<2",
+    # §5b Authorization (Phase 2): self-issued signed scoped tokens for /mcp.
+    # PyJWT also ships transitively with mcp, but we depend on it explicitly
+    # since mapcontrol_server.auth imports it directly.
+    "pyjwt>=2.9.0",
+    # Standalone auth portal (MAPCONTROL_AUTH_MODE=standalone): the default
+    # portal user store is SQLAlchemy-Core async on SQLite (aiosqlite is
+    # already a dependency); any async SQLAlchemy URL swaps the backend via
+    # MAPCONTROL_USERS_DB_URL with no code change. See mapcontrol_server/portal/.
+    "sqlalchemy[asyncio]>=2.0.0",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+mapcontrol-server = "mapcontrol_server.main:run"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,353 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   ESIP Default Outfit — styles for the optional built-in management UI.
+
+   This file dresses the otherwise-naked map. It is loaded ONLY when the map
+   is served with ?ui=default (or a server/per-map default of "default").
+   The naked map renders none of this; it just emits interaction events into
+   the void via postMessage + window CustomEvents. See esip-embed.js.
+
+   All colors reference the --eo-* theme tokens defined inline by the map
+   shell (light/dark, picked by ?theme=). Fallbacks are provided so the
+   outfit still looks correct if loaded against a shell without them.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.esip-ui {
+    --esip-bg: var(--eo-surface, #ffffff);
+    --esip-bg-hover: var(--eo-surface-hover, rgba(0, 0, 0, 0.04));
+    --esip-border: var(--eo-border, rgba(0, 0, 0, 0.08));
+    --esip-text: var(--eo-text, #0f172a);
+    --esip-muted: var(--eo-text-muted, #475569);
+    --esip-accent: var(--eo-accent, #5fa830);
+    --esip-accent-soft: var(--eo-accent-soft, rgba(124, 194, 66, 0.18));
+    --esip-shadow: var(--eo-shadow, 0 8px 24px -8px rgba(15, 23, 42, 0.16), 0 2px 6px -2px rgba(15, 23, 42, 0.08));
+    --esip-danger: #e5484d;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--esip-text);
+    box-sizing: border-box;
+}
+
+.esip-ui *,
+.esip-ui *::before,
+.esip-ui *::after {
+    box-sizing: border-box;
+}
+
+/* ─── Gear toggle (the single always-present affordance) ─────────────────── */
+.esip-gear {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1200;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--esip-border);
+    border-radius: 8px;
+    background: var(--esip-bg);
+    color: var(--esip-text);
+    cursor: pointer;
+    box-shadow: var(--esip-shadow);
+    transition: border-color 120ms ease, background 120ms ease;
+}
+.esip-gear:hover { border-color: var(--esip-accent); }
+.esip-gear svg { width: 20px; height: 20px; }
+
+/* ─── The expandable column ──────────────────────────────────────────────── */
+.esip-panel {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1300;
+    width: 320px;
+    max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    display: flex;
+    flex-direction: column;
+    background: var(--esip-bg);
+    border: 1px solid var(--esip-border);
+    border-radius: 10px;
+    box-shadow: var(--esip-shadow);
+    overflow: hidden;
+    transform-origin: top left;
+    transition: opacity 120ms ease, transform 120ms ease;
+}
+.esip-panel[hidden] { display: none; }
+.esip-panel.esip-collapsing { opacity: 0; transform: scale(0.97); }
+
+.esip-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--esip-border);
+}
+.esip-panel-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+.esip-iconbtn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--esip-muted);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+.esip-iconbtn:hover { background: var(--esip-bg-hover); color: var(--esip-text); }
+.esip-iconbtn svg { width: 16px; height: 16px; }
+
+/* ─── Tabs ───────────────────────────────────────────────────────────────── */
+.esip-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px 0;
+    border-bottom: 1px solid var(--esip-border);
+}
+.esip-tab {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--esip-muted);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 10px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 120ms ease, border-color 120ms ease;
+}
+.esip-tab:hover { color: var(--esip-text); }
+.esip-tab[aria-selected="true"] {
+    color: var(--esip-text);
+    border-bottom-color: var(--esip-accent);
+}
+
+.esip-tabpanel {
+    overflow-y: auto;
+    padding: 8px;
+}
+.esip-tabpanel[hidden] { display: none; }
+
+/* ─── Layer groups + rows ────────────────────────────────────────────────── */
+.esip-group { margin-bottom: 10px; }
+.esip-group-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--esip-muted);
+}
+.esip-group-count {
+    font-weight: 500;
+    opacity: 0.7;
+}
+.esip-empty {
+    padding: 16px 8px;
+    font-size: 12px;
+    color: var(--esip-muted);
+    text-align: center;
+}
+
+.esip-row {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    margin-bottom: 2px;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+.esip-row:hover { background: var(--esip-bg-hover); }
+.esip-row.esip-active {
+    background: var(--esip-accent-soft);
+    border-color: var(--esip-accent);
+}
+.esip-row-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+}
+.esip-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    flex-shrink: 0;
+    border: 1px solid var(--esip-border);
+    background-size: cover;
+    background-position: center;
+}
+.esip-row-text {
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+}
+.esip-row-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.esip-row-sub {
+    font-size: 10.5px;
+    color: var(--esip-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.esip-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.esip-row-actions .esip-iconbtn { width: 26px; height: 26px; }
+.esip-iconbtn.esip-eye-off { color: var(--esip-muted); opacity: 0.45; }
+.esip-iconbtn.esip-danger:hover { color: var(--esip-danger); background: var(--esip-bg-hover); }
+
+/* Expanded detail area (revealed on click) */
+.esip-row-detail {
+    padding: 2px 10px 10px;
+    border-top: 1px dashed var(--esip-border);
+    margin: 0 8px;
+    font-size: 11.5px;
+    color: var(--esip-muted);
+}
+.esip-row-detail[hidden] { display: none; }
+.esip-detail-md { color: var(--esip-text); line-height: 1.45; margin-bottom: 6px; }
+.esip-detail-md code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    background: var(--esip-bg-hover);
+    padding: 1px 4px;
+    border-radius: 4px;
+}
+.esip-opacity-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.esip-opacity-row label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+.esip-opacity-row input[type="range"] { flex: 1; accent-color: var(--esip-accent); }
+
+/* Basemap radio list */
+.esip-basemap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.esip-basemap:hover { background: var(--esip-bg-hover); }
+.esip-basemap input { accent-color: var(--esip-accent); }
+.esip-basemap-thumb {
+    width: 28px; height: 28px; border-radius: 5px; flex-shrink: 0;
+    border: 1px solid var(--esip-border);
+    background-size: cover; background-position: center;
+}
+
+/* ─── Settings tab ───────────────────────────────────────────────────────── */
+.esip-setting {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--esip-border);
+}
+.esip-setting:last-child { border-bottom: none; }
+.esip-setting-text { flex: 1; }
+.esip-setting-title { font-size: 12.5px; font-weight: 500; }
+.esip-setting-desc { font-size: 10.5px; color: var(--esip-muted); margin-top: 2px; }
+
+/* Toggle switch */
+.esip-switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+.esip-switch input { opacity: 0; width: 0; height: 0; }
+.esip-switch-slider {
+    position: absolute; inset: 0; cursor: pointer;
+    background: var(--esip-border); border-radius: 999px;
+    transition: background 140ms ease;
+}
+.esip-switch-slider::before {
+    content: ""; position: absolute; height: 16px; width: 16px;
+    left: 3px; top: 3px; background: #fff; border-radius: 50%;
+    transition: transform 140ms ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.esip-switch input:checked + .esip-switch-slider { background: var(--esip-accent); }
+.esip-switch input:checked + .esip-switch-slider::before { transform: translateX(16px); }
+
+/* ─── Hover card (peek) ──────────────────────────────────────────────────── */
+.esip-hovercard {
+    position: absolute;
+    z-index: 1400;
+    max-width: 280px;
+    min-width: 180px;
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    background: var(--esip-bg);
+    border: 1px solid var(--esip-border);
+    border-radius: 10px;
+    box-shadow: var(--esip-shadow);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 90ms ease;
+}
+.esip-hovercard.esip-show { opacity: 1; }
+.esip-hovercard-visual {
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    border: 1px solid var(--esip-border);
+    background-size: cover;
+    background-position: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--esip-muted);
+}
+.esip-hovercard-visual svg { width: 24px; height: 24px; }
+.esip-hovercard-body { min-width: 0; }
+.esip-hovercard-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+    margin-bottom: 2px;
+}
+.esip-hovercard-type {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--esip-accent);
+    background: var(--esip-accent-soft);
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-bottom: 4px;
+}
+.esip-hovercard-stat { font-size: 11px; color: var(--esip-muted); }
+.esip-hovercard-desc {
+    font-size: 11.5px;
+    color: var(--esip-text);
+    line-height: 1.4;
+    margin-top: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}

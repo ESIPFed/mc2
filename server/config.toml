@@ -1,0 +1,182 @@
+[server]
+host = "0.0.0.0"
+port = 7777
+
+[session]
+# Time-to-live for inactive sessions (in seconds). 0 = no expiry.
+ttl_seconds = 86400
+
+[storage]
+# Directory for uploaded files (relative to server working directory)
+file_dir = "./data/files"
+# SQLite database path
+database_path = "./data/mapcontrol.db"
+
+[map]
+# Default basemap — must match a key in [map.basemaps] below. If the
+# default refers to a basemap whose provider API key is unset, the loader
+# falls back to the first available entry.
+default_basemap = "satellite"
+# Basemap used instead of default_basemap when a map's THEME is dark and no
+# basemap was explicitly chosen (create_map arg, set_basemap, or ?basemap=).
+# Keyless Carto Dark Matter so it works without provider API keys.
+default_dark_basemap = "carto_dark"
+# Default terrain mode: "2d" or "3d" (3d = globe with terrain tiles + sky)
+default_terrain = "3d"
+
+# ─── Basemap providers ────────────────────────────────────────────────────
+# A provider is a tile vendor that requires an API key. Each provider names
+# the env var to read at load time; basemaps that reference a provider get
+# their {api_key} placeholder substituted with that value. If the env var
+# is empty/unset, those basemaps are dropped silently — so the keyless dev
+# experience stays clean.
+#
+# Adding a new provider (Mapbox, Stadia, Thunderforest, etc.) is a
+# config-only change: add a [map.providers.X] block here, then one
+# [map.basemaps.Y] block per style referencing provider = "X".
+
+[map.providers.maptiler]
+api_key_env = "MAPTILER_API_KEY"
+
+# ─── Basemaps ─────────────────────────────────────────────────────────────
+# Each entry is a self-contained basemap shown in the picker UI.
+#   label       — display name in the basemap selector
+#   kind        — "raster" today; "vector" reserved for MapLibre style.json URLs
+#   url         — XYZ tile template; may contain {api_key} if `provider` is set
+#   attribution — shown in the MapLibre attribution control (HTML allowed)
+#   tile_size   — 256 or 512 (MapTiler offers 512 variants for sharper text)
+#   max_zoom    — max zoom the provider serves
+#   provider    — optional; key into [map.providers] for {api_key} substitution
+
+[map.basemaps.osm]
+label = "OpenStreetMap"
+group = "navigation"
+kind = "raster"
+url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+attribution = "&copy; OpenStreetMap contributors"
+tile_size = 256
+max_zoom = 19
+
+[map.basemaps.satellite]
+label = "Esri Satellite"
+group = "satellite"
+kind = "raster"
+url = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+attribution = "&copy; Esri"
+tile_size = 256
+max_zoom = 19
+
+# Keyless dark basemap — the default for dark-themed maps (see
+# default_dark_basemap). Carto's Dark Matter raster tiles are free for
+# non-commercial/fair use with attribution, no API key required, so it is
+# always available even when provider keys are unset.
+[map.basemaps.carto_dark]
+label = "Carto Dark Matter"
+group = "data"
+kind = "raster"
+url = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+attribution = "&copy; OpenStreetMap contributors &copy; CARTO"
+tile_size = 256
+max_zoom = 20
+
+# Vector streets — labels render client-side as a continuous overlay
+# (no tile-boundary popping). Upgraded from raster streets-v2 to vector
+# streets-v4 (current generation, cleaner cartography).
+[map.basemaps.maptiler_streets]
+label = "MapTiler Streets"
+group = "navigation"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/streets-v4/style.json?key={api_key}"
+
+# Native 512 PNG (no /256/ segment) — matches the dark variant's quality
+# treatment for sharper Retina rendering and no JPG seams.
+[map.basemaps.maptiler_satellite]
+label = "MapTiler Satellite"
+group = "satellite"
+provider = "maptiler"
+kind = "raster"
+url = "https://api.maptiler.com/maps/satellite-v4/{z}/{x}/{y}.png?key={api_key}"
+attribution = "&copy; <a href=\"https://www.maptiler.com/copyright/\" target=\"_blank\">MapTiler</a>"
+tile_size = 512
+max_zoom = 22
+
+# satellite-v4-dark: night-satellite + dimmed aerial imagery, no labels.
+# Pair with maptiler_satellite for a light/dark satellite toggle.
+# PNG (not JPG) avoids JPG chroma quantization seams on dark imagery.
+# URL omits the tile-size segment because MapTiler's v4 dark variants
+# only accept "/256/" or no segment; "/512/" returns 404. The no-segment
+# form serves native 512px tiles for Retina sharpness.
+[map.basemaps.maptiler_satellite_dark]
+label = "MapTiler Satellite Dark"
+group = "satellite"
+provider = "maptiler"
+kind = "raster"
+url = "https://api.maptiler.com/maps/satellite-v4-dark/{z}/{x}/{y}.png?key={api_key}"
+attribution = "&copy; <a href=\"https://www.maptiler.com/copyright/\" target=\"_blank\">MapTiler</a>"
+tile_size = 512
+max_zoom = 22
+
+# Hybrid = satellite imagery + vector labels/roads/boundaries.
+# Vector style.json: labels render client-side as a continuous overlay,
+# so they don't pop or shift at tile boundaries (the raster hybrid bug).
+# Attribution/maxzoom come from the style.json itself.
+[map.basemaps.maptiler_hybrid]
+label = "MapTiler Hybrid"
+group = "satellite"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/hybrid-v4/style.json?key={api_key}"
+
+# Vector dark hybrid — same setStyle path as maptiler_hybrid; the dark
+# style.json carries its own label/road styling.
+[map.basemaps.maptiler_hybrid_dark]
+label = "MapTiler Hybrid Dark"
+group = "satellite"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/hybrid-v4-dark/style.json?key={api_key}"
+
+# Topographic — elevation contours, hill shading, hiking-relevant labels.
+[map.basemaps.maptiler_topo]
+label = "MapTiler Topo"
+group = "data"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/topo-v4/style.json?key={api_key}"
+
+# DataViz light/dark — muted backgrounds designed for data overlays.
+# Pairs well with GeoTIFFs and polygons since the basemap doesn't
+# compete for attention.
+[map.basemaps.maptiler_dataviz_light]
+label = "MapTiler DataViz"
+group = "data"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/dataviz-light/style.json?key={api_key}"
+
+[map.basemaps.maptiler_dataviz_dark]
+label = "MapTiler DataViz Dark"
+group = "data"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/dataviz-dark/style.json?key={api_key}"
+
+# Vector outdoor — trail markers, peak names, hill labels render
+# smoothly. Upgraded from raster outdoor-v2 to vector outdoor-v4.
+[map.basemaps.maptiler_outdoor]
+label = "MapTiler Outdoor"
+group = "navigation"
+provider = "maptiler"
+kind = "vector"
+url = "https://api.maptiler.com/maps/outdoor-v4/style.json?key={api_key}"
+
+[map.defaults]
+center_lon = 0.0
+center_lat = 20.0
+zoom = 1.5
+
+[map.style]
+fill_color = "#3388ff40"
+stroke_color = "#3388ff"
+stroke_width = 2

@@ -1,0 +1,26 @@
+.git
+.github
+__pycache__
+*.pyc
+.venv
+venv
+node_modules
+sdk/
+docs/
+vision/
+demo*.py
+debug*.py
+test*.py
+serve_tiffs.py
+*.md
+!server/
+!example_tiff/
+# !server/ re-includes everything under server/ — re-exclude the local venv
+# (dockerignore rules are last-match-wins).
+server/.venv
+docker-compose.yml
+ec2-setup.sh
+ec2-userdata.sh
+deploy.sh
+apprunner-config.json
+.clinerules

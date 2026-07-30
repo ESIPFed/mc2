@@ -1,0 +1,35 @@
+# Local private PyPI index for the mapcontrol SDK.
+#
+# This rehearses the public-PyPI experience: consumers declare
+# `mapcontrol` by name against an index URL, so flipping to the real
+# PyPI (or a client-hosted index) later is a one-line index-URL change
+# on the consumer side — nothing else moves.
+#
+#   docker compose up -d          # index at http://localhost:8081/simple/
+#
+# Publish (from sdk/):
+#   uv build
+#   uv publish --publish-url http://localhost:8081/ \
+#       --username "" --password ""
+#
+# Consume (uv / pip):
+#   [[tool.uv.index]]
+#   name = "mapcontrol-local"
+#   url = "http://localhost:8081/simple/"
+#
+# Auth is disabled for local dev (-a . -P .). For a shared/client
+# deployment, mount an htpasswd file and drop the two flags — see
+# https://github.com/pypiserver/pypiserver#authentication
+services:
+  pypiserver:
+    container_name: mapcontrol-pypi
+    image: pypiserver/pypiserver:latest
+    command: run -a . -P . /data/packages
+    ports:
+      - "8081:8080"
+    volumes:
+      - pypi-packages:/data/packages
+    restart: unless-stopped
+
+volumes:
+  pypi-packages:
