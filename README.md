@@ -134,6 +134,14 @@ Then just ask:
 
 See **[docs/mcp-integration.md](docs/mcp-integration.md)** for full setup guides (Claude Desktop, Cline, Claude.ai web, OpenAI Agents SDK) and transport details.
 
+### 4. Generating analysis code? Drop the SDK into your harness
+
+If your system auto-generates analysis code — a planner, an agent loop, a notebook generator — append the context block from **[docs/llm-context.md](docs/llm-context.md)** to the generator's prompt. One extra block, and the SDK's usage slides right into every generated script: results land on a live, shareable map instead of dying in a stdout log.
+
+It works interactively too — paste it into ChatGPT, Cursor, or Copilot with your script:
+
+> *"Here's my NDVI script. Put the result raster on the map, outline the study area, and zoom to it."*
+
 ## MCP tools
 
 | Tool | What it does |
