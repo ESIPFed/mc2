@@ -57,30 +57,16 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 
 ## Quick start
 
-### 0. Prerequisites
-
-- **Docker path (recommended):** just [Docker](https://docs.docker.com/get-docker/) with Compose.
-- **From-source path:** Python **3.11+**, plus system **GDAL** (needed by `rasterio` — `brew install gdal` / `apt install libgdal-dev gdal-bin`). Screenshots additionally need a headless Chromium: `playwright install chromium`. The Docker image handles all of this for you.
-
 ### 1. Run the server
 
-**Docker (recommended):**
+All you need is [Docker](https://docs.docker.com/get-docker/) — the image bundles everything else (Python, GDAL, a headless Chromium for screenshots).
 
 ```bash
 git clone https://github.com/ESIPFed/mc2.git && cd mc2
 docker compose up --build
 ```
 
-The first build takes a few minutes (it installs GDAL and a headless Chromium for screenshots). Subsequent starts are instant. Map data persists in `./data/`.
-
-**Or from source:**
-
-```bash
-git clone https://github.com/ESIPFed/mc2.git && cd mc2/server
-pip install -e ".[dev]"
-playwright install chromium   # only needed for take_screenshot
-uvicorn mapcontrol_server.main:app --reload --port 8000
-```
+The first build takes a few minutes; subsequent starts are instant. Map data persists in `./data/`.
 
 **Verify it's up:**
 
@@ -121,9 +107,7 @@ session.add_polygon(
 session.set_basemap("satellite")
 session.set_theme("dark")
 
-# PNG of the current view (needs Chromium — bundled in Docker;
-# from source run `playwright install chromium` first)
-shot = session.take_screenshot()
+shot = session.take_screenshot()   # PNG of the current view
 ```
 
 Watch the browser tab while the script runs — every call lands on the shared map live.
@@ -205,19 +189,20 @@ Sample GeoTIFFs live in [`examples/data/`](examples/data/).
 
 ## Running tests
 
+The acceptance suites run inside the same image you deploy — exactly how CI gates every push:
+
 ```bash
-cd server
-pip install -e ".[dev]"
-pytest tests/ -v
+docker compose run --rm server python tests/test_mcp.py        # MCP conformance
+docker compose run --rm server python tests/test_mcp_auth.py   # MCP authorization
 ```
+
+(Hacking on the server internals? `server/` is a standard installable Python package — `pip install -e ".[dev]" && pytest tests/ -v` from that directory, with system GDAL and `playwright install chromium` on your machine. For just *running* MapControl, Docker is the way.)
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `port is already allocated` on start | Something else is on 8000. Change the compose mapping to e.g. `"8010:8000"` and point the SDK at `http://localhost:8010`. |
-| `rasterio` fails to install from source | Install system GDAL first (`brew install gdal` / `apt install libgdal-dev gdal-bin`), or use Docker. |
-| `take_screenshot` errors from source | Run `playwright install chromium` once. The Docker image ships it preinstalled. |
 | Shared map links point at `localhost` | Set `MAPCONTROL_PUBLIC_URL` to your server's public URL so map links work off-machine. |
 | Maps vanish after container restart | Keep the `./data` volume mount from `docker-compose.yml` — SQLite and uploaded files live there. |
 
