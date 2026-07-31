@@ -42,7 +42,7 @@ will defer to **EOGPT's future platform authentication** (a real AS / IdP — e.
 the EOGPT login issuing scoped tokens, or Cognito/Auth0). This toy AS is only for
 the *standalone* Claude-web demo box and is mutually exclusive with §5b on the
 same instance (FastMCP forbids both ``auth_server_provider`` and
-``token_verifier``). See docs/vision/mcp-compliance-roadmap.md.
+``token_verifier``). See .vision-documents/mcp-compliance-roadmap.md.
 """
 
 from __future__ import annotations

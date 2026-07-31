@@ -1,4 +1,4 @@
-"""§5b Authorization for the MCP endpoint (docs/vision/mcp-compliance-roadmap.md Phase 2).
+"""§5b Authorization for the MCP endpoint (.vision-documents/mcp-compliance-roadmap.md Phase 2).
 
 ESIP becomes an OAuth 2.1 **Resource Server** on ``/mcp``: callers present a
 bearer token, which a :class:`SelfIssuedTokenVerifier` validates. The default

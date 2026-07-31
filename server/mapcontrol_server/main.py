@@ -27,7 +27,7 @@ from .services import screenshot_service
 
 from .routers import maps, sessions, events, assets, files
 
-# MCP layer (Phase 0 of docs/vision/mcp-compliance-roadmap.md): an in-process
+# MCP layer (Phase 0 of .vision-documents/mcp-compliance-roadmap.md): an in-process
 # Model Context Protocol server mounted at /mcp (Streamable HTTP). It wraps the
 # SAME service functions the REST API uses — additive, no separate state.
 from .mcp_tools import mcp_server
@@ -37,7 +37,7 @@ from .mcp_tools import mcp_server
 # nothing else to wire. Must come after mcp_tools (one-way import).
 from . import mcp_resources  # noqa: F401
 
-# MCP Apps layer (ext-apps / SEP-1865; docs/vision/mcp-apps-appification.md):
+# MCP Apps layer (ext-apps / SEP-1865; .vision-documents/mcp-apps-appification.md):
 # the ui:// template + show_map tool + _meta.ui stamping + the
 # io.modelcontextprotocol/ui extension advertisement. Import == install;
 # MUST come after mcp_tools/mcp_resources and BEFORE mcp_compat (compat
@@ -48,7 +48,7 @@ from . import mcp_apps  # noqa: F401
 # resultType / ttlMs / cacheScope / serverInfo _meta on results and maps
 # resource-not-found reads to -32602. Import == install; MUST come after
 # mcp_tools AND mcp_resources so every request handler is registered before
-# wrapping. See mcp_compat.py + docs/vision/mcp-2026-protocol-upgrade.md.
+# wrapping. See mcp_compat.py + .vision-documents/mcp-2026-protocol-upgrade.md.
 from . import mcp_compat  # noqa: F401
 
 # Standalone auth portal (MAPCONTROL_AUTH_MODE=standalone; see portal/):
@@ -119,7 +119,7 @@ app = FastAPI(
 
 
 # CORS — config-driven allowlist (Phase 1 edge hardening; see
-# docs/vision/mcp-compliance-roadmap.md). Dual-deployability invariant: the DEFAULT
+# .vision-documents/mcp-compliance-roadmap.md). Dual-deployability invariant: the DEFAULT
 # (env unset) stays permissive `*` so local dev / docker-compose.local.yml work
 # untouched; the CLOUD env-file sets MAPCONTROL_ALLOWED_ORIGINS to the real
 # browser origins (e.g. the Svelte UI) to lock the public surface down.

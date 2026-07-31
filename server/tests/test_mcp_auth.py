@@ -1,4 +1,4 @@
-"""§5b Authorization acceptance test (docs/vision/mcp-compliance-roadmap.md Phase 2).
+"""§5b Authorization acceptance test (.vision-documents/mcp-compliance-roadmap.md Phase 2).
 
 Exercises mapcontrol_server.auth — the ESIP self-issued signed scoped-token
 Resource Server for /mcp — by building a FastMCP instance from build_auth()

@@ -51,8 +51,7 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 | [`server/`](server/) | FastAPI server — REST API, WebSocket hub, MCP server, GeoTIFF & screenshot services, auth portal |
 | [`sdk/`](sdk/) | `mapcontrol` — typed Python client SDK |
 | [`examples/`](examples/) | Runnable demo scripts (shapes, terrain, glyphs, GeoTIFFs) + sample data |
-| [`docs/`](docs/) | Guides — MCP integration, MCP Apps field guide, map-engine comparison |
-| [`docs/vision/`](docs/vision/) | Design docs — architecture, specification, roadmap, protocol notes |
+| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison |
 | [`deploy/`](deploy/) | Deployment helpers (local PyPI index for the SDK) |
 
 ## Quick start

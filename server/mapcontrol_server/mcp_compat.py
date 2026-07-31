@@ -1,6 +1,6 @@
 """2026 draft-revision pre-adoption shims (Phase 5, forward-compatible half).
 
-The next MCP spec revision (see ``docs/vision/mcp-2026-protocol-upgrade.md``) is
+The next MCP spec revision (see ``.vision-documents/mcp-2026-protocol-upgrade.md``) is
 still a Draft and the installed ``mcp`` SDK (1.28.x) does not speak it yet —
 the breaking half (no ``initialize``, ``server/discover``,
 ``subscriptions/listen``) MUST wait for the SDK. But several of its

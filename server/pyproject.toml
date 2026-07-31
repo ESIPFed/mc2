@@ -21,7 +21,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "python-multipart>=0.0.6",
     "playwright>=1.40.0",
-    # MCP layer (Phase 0, docs/vision/mcp-compliance-roadmap.md): official MCP Python
+    # MCP layer (Phase 0, .vision-documents/mcp-compliance-roadmap.md): official MCP Python
     # SDK (bundles FastMCP + Streamable HTTP), mounted in-process at /mcp.
     # Pinned <2: mcp 2.0.0 (2026-07) removed mcp.server.fastmcp (FastMCP
     # moved out of the SDK), which breaks mcp_tools.py at import. Revisit

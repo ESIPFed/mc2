@@ -1,4 +1,4 @@
-"""Phase 0 MCP conformance / acceptance test (docs/vision/mcp-compliance-roadmap.md).
+"""Phase 0 MCP conformance / acceptance test (.vision-documents/mcp-compliance-roadmap.md).
 
 Boots the real FastAPI app (with the MCP layer mounted at /mcp) against a
 throwaway SQLite DB and asserts:
@@ -8,7 +8,7 @@ throwaway SQLite DB and asserts:
   * Version negotiation: requesting `2025-11-25` (the current spec revision)
     is echoed back verbatim, and an unknown/future version falls back to a
     server-supported one (closes the Phase-3 known gap; see
-    docs/vision/mcp-2026-protocol-upgrade.md).
+    .vision-documents/mcp-2026-protocol-upgrade.md).
   * 2026 draft-revision pre-adoption (mcp_compat.py): results carry
     `resultType: "complete"` (SEP-2322), `ttlMs`/`cacheScope` on cacheable
     results (SEP-2549), server identity in `_meta` (SEP-2575 SHOULD);
@@ -18,7 +18,7 @@ throwaway SQLite DB and asserts:
   * Advertised capabilities == implemented: `tools` AND `resources` (the §6
     Resources layer) are advertised; prompts/experimental remain suppressed;
     the MCP Apps extension (`io.modelcontextprotocol/ui`) is advertised in
-    `capabilities.extensions` (mcp_apps.py; docs/vision/mcp-apps-appification.md).
+    `capabilities.extensions` (mcp_apps.py; .vision-documents/mcp-apps-appification.md).
   * `tools/list` returns exactly the 14 tools (12 consolidated + set_theme
     + show_map).
   * MCP Apps (ext-apps / SEP-1865): UI-enabled tools (create_map, show_map)
@@ -207,7 +207,7 @@ def test_mcp_phase0():
         # ── Version negotiation (Phase-3 known gap, closed 2026-07-16) ──────
         # The 2026 draft revision (SEP-2575) will replace initialize entirely;
         # until then the gate must pin the FULL currently-supported set, not
-        # just 2025-06-18. See docs/vision/mcp-2026-protocol-upgrade.md §5.
+        # just 2025-06-18. See .vision-documents/mcp-2026-protocol-upgrade.md §5.
         # Requesting the current spec revision must be echoed back verbatim.
         init_1125 = _parse_sse(_mcp(client, None, {
             "jsonrpc": "2.0", "id": 30, "method": "initialize",

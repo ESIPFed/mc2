@@ -85,6 +85,36 @@ FEEDBACK (the map talks back)
     session.enable_drawing("polygon")         # let a human sketch on the map
     session.get_drawn_features_geojson()      # ...then read what they drew
 
+PATTERN — analysis with map calls interspersed. The analysis functions are
+placeholders for whatever the task is; the map calls around them are the
+shape to reproduce.
+
+    session = MapControl(SERVER).create_map(); print(session.url)
+
+    # 1. show the input region before analyzing it
+    aoi = session.add_polygon(area_of_interest, style={"label": True})
+    session.zoom_to_assets([aoi.asset_id])
+
+    # 2. analysis produces a gridded result -> show it (rasters go by URL)
+    result_url = run_analysis(area_of_interest)          # <- your analysis
+    grid = session.add_geotiff_singleband(result_url, colormap="viridis",
+                                          vmin=0, vmax=1, alpha=0.7)
+
+    # 3. analysis flags features of interest -> draw them so they stand out
+    flagged = extract_features(result_url)               # <- your analysis (GeoJSON list)
+    session.add_polygons(
+        items=[{"geojson": f} for f in flagged],
+        default_style={"stroke_color": "#ef4444", "glow": True, "label": True})
+
+    # 4. frame the evidence and hand over the live map
+    session.zoom_to_assets([grid.asset_id])
+    print("results:", session.url)
+
+Mirror this shape for whatever the analysis produces: regions ->
+add_polygon, gridded results -> add_geotiff_*, features/detections ->
+add_points / add_polygons, routes -> add_path. Skip stages that don't
+apply (a vector-only workflow has no raster step).
+
 RULES FOR GENERATED CODE
 1. Keep every returned .asset_id in a variable — later steps restyle, hide,
    or zoom to those handles.

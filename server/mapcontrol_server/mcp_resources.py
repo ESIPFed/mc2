@@ -1,6 +1,6 @@
 """MCP Resources layer for the Map Control server (roadmap §6, partial).
 
-Phase 4+ §6 of ``docs/vision/mcp-compliance-roadmap.md``: expose the server's
+Phase 4+ §6 of ``.vision-documents/mcp-compliance-roadmap.md``: expose the server's
 canonical state as **MCP Resources** with stable ``map://`` URIs, so MCP
 clients (Claude web/desktop, Cline, ...) can read — and re-read — every
 asset the tools create, in its most natural representation (GeoJSON as

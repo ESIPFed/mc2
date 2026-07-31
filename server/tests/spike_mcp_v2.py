@@ -2,7 +2,7 @@
 it): minimal MCPServer from the mcp v2 beta over Streamable HTTP.
 
 Phase 5 migration reconnaissance for the 2026 protocol revision. Findings are
-recorded in docs/vision/mcp-2026-protocol-upgrade.md §7. Re-run against each new
+recorded in .vision-documents/mcp-2026-protocol-upgrade.md §7. Re-run against each new
 v2 pre-release (b3/rc/stable, expected 2026-07-28) to track when
 server/discover lands.
 

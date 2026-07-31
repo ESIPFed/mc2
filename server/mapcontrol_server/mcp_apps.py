@@ -1,7 +1,7 @@
 """MCP Apps layer (ext-apps / SEP-1865) — the ESIP map as an inline chat app.
 
 Implements the server half of the MCP Apps extension
-(``io.modelcontextprotocol/ui``) per ``docs/vision/mcp-apps-appification.md`` §5,
+(``io.modelcontextprotocol/ui``) per ``.vision-documents/mcp-apps-appification.md`` §5,
 on the stable 1.x SDK (no beta pins). Option A (thin wrapper): the ``ui://``
 template renders the existing live ``/map/{map_id}`` page in a nested iframe,
 so the full live map (WebSocket push, drawing, terrain) appears inline in
@@ -124,7 +124,7 @@ def _ui_resource_meta() -> dict[str, Any]:
     signal for hosts that do honor it (spec §Sandbox proxy step 5), and
     harmless on Claude web.
 
-    Probe history (see docs/vision/mcp-apps-appification.md §6): probes 1-3 the
+    Probe history (see .vision-documents/mcp-apps-appification.md §6): probes 1-3 the
     342KB vite bundle broke document delivery, masking everything; 4-6
     isolated delivery/handshake (app INITIATES ui/initialize); 7 proved
     frameDomains unsupported on Claude web; 8 mapped the channels.

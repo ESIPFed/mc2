@@ -1,6 +1,6 @@
 """MCP (Model Context Protocol) layer for the Map Control server.
 
-Phase 0 of the MCP compliance roadmap (see ``docs/vision/mcp-compliance-roadmap.md``):
+Phase 0 of the MCP compliance roadmap (see ``.vision-documents/mcp-compliance-roadmap.md``):
 expose the existing FastAPI proxy's capabilities over MCP **in-process**, mounted
 at ``/mcp`` (Streamable HTTP) on the same FastAPI app. Each tool is a thin wrapper
 over the existing service functions (``event_service`` / ``session_service`` /
@@ -17,7 +17,7 @@ Design invariants (enforced here, see roadmap §"Invariants"):
   ready), not via implicit session binding.
 * **EPSG:4326 only across the MCP boundary.** All GeoJSON in/out is lon/lat 4326.
 
-The consolidated tool set (12 tools) follows ``docs/vision/mcp-tool-consolidation.md``:
+The consolidated tool set (12 tools) follows ``.vision-documents/mcp-tool-consolidation.md``:
 ``create_map``, ``add_geojson``, ``add_geotiff``, ``zoom``, ``list_assets``,
 ``delete_asset``, ``set_visibility``, ``update_style``, ``set_basemap``,
 ``set_theme``, ``get_viewport``, ``take_screenshot``.
@@ -74,7 +74,7 @@ _transport_security = TransportSecuritySettings(
     allowed_hosts=_allowed_hosts,
 )
 
-# ─── §5b Authorization (Phase 2, docs/vision/mcp-compliance-roadmap.md) ───────────
+# ─── §5b Authorization (Phase 2, .vision-documents/mcp-compliance-roadmap.md) ───────────
 # OFF by default (ADR-0001 dual-deployability): build_auth() returns (None, None)
 # unless MAPCONTROL_MCP_AUTH=1, so local / docker-compose.local.yml / Phase 0-1
 # behavior is byte-for-byte unchanged. When enabled, FastMCP turns into an OAuth

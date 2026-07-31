@@ -147,7 +147,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         # points and stores it as an ordinary vector asset (asset_type="arc").
         # Endpoint dots + optional names ride along as Point features in the
         # same FeatureCollection — a macro over existing primitives, no new
-        # rendering machinery (see docs/vision/asset-style-ir.md).
+        # rendering machinery (see .vision-documents/asset-style-ir.md).
         if "from" not in event.data or "to" not in event.data:
             return MapEventResponse(
                 event_id=event_id,
