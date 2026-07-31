@@ -6,7 +6,7 @@ Showcases MapLibre GL JS native flyTo animation — the van Wijk
 smooth zoom algorithm. Flies between 10 cities around the world.
 
 Prerequisites:
-  - Server running: cd server && uvicorn mapcontrol_server.main:app --reload --port 8888
+  - Server running: docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8000)
   - SDK installed: cd sdk && pip install -e .
 
 Usage:
@@ -19,11 +19,11 @@ import time
 import webbrowser
 
 # Add SDK to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "sdk"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk"))
 
 from mapcontrol import MapControl
 
-SERVER_URL = "http://localhost:8888"
+SERVER_URL = "http://localhost:8000"
 
 # Time to wait for each animation to complete before sending the next
 WAIT = 6
