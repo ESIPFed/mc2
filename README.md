@@ -58,20 +58,26 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 
 ### 1. Run the server
 
-All you need is [Docker](https://docs.docker.com/get-docker/) — the image bundles everything else (Python, GDAL, a headless Chromium for screenshots).
+All you need is [Docker](https://docs.docker.com/get-docker/) — the published image bundles everything else (Python, GDAL, a headless Chromium for screenshots). No clone required. Save this as `docker-compose.yml`:
 
-```bash
-git clone https://github.com/ESIPFed/mc2.git && cd mc2
-docker compose up --build
+```yaml
+services:
+  mapcontrol:
+    image: ghcr.io/esipfed/mc2:latest
+    ports: ["8000:8000"]
 ```
 
-The first build takes a few minutes; subsequent starts are instant. Map data persists in `./data/`.
+```bash
+docker compose up -d
+```
 
 **Verify it's up:**
 
 ```bash
 curl http://localhost:8000/docs   # interactive API docs
 ```
+
+That's the whole install. Want maps that survive restarts, share links that work off your machine, or premium basemaps? See **[docs/deployment.md](docs/deployment.md)** — it walks from this minimal setup to a full production config and explains what every knob does. (Contributors: `git clone` this repo and `docker compose up --build` builds the image locally.)
 
 ### 2. Drive a map from Python
 
@@ -179,6 +185,8 @@ It works interactively too — paste it into ChatGPT, Cursor, or Copilot with yo
 
 Everything lives in [`server/config.toml`](server/config.toml) — host/port, session TTL, storage paths, default basemap/theme/terrain, and the full basemap catalog. Keyless basemaps (OSM, Esri Satellite, Carto Dark) work out of the box; set `MAPTILER_API_KEY` to unlock the MapTiler vector styles. Adding a new tile provider is a config-only change.
 
+**[docs/deployment.md](docs/deployment.md)** covers the compose setups (minimal → production), what every environment variable does to the map, custom `config.toml` mounts, and running behind a reverse proxy.
+
 Optional auth for `/mcp` is controlled via environment (`MAPCONTROL_AUTH_MODE`) — see [`server/mapcontrol_server/portal/`](server/mapcontrol_server/portal/) for the standalone authorization portal.
 
 ## Demos
@@ -199,8 +207,8 @@ Sample GeoTIFFs live in [`examples/data/`](examples/data/).
 The acceptance suites run inside the same image you deploy — exactly how CI gates every push:
 
 ```bash
-docker compose run --rm server python tests/test_mcp.py        # MCP conformance
-docker compose run --rm server python tests/test_mcp_auth.py   # MCP authorization
+docker compose run --rm mapcontrol python tests/test_mcp.py        # MCP conformance
+docker compose run --rm mapcontrol python tests/test_mcp_auth.py   # MCP authorization
 ```
 
 (Hacking on the server internals? `server/` is a standard installable Python package — `pip install -e ".[dev]" && pytest tests/ -v` from that directory, with system GDAL and `playwright install chromium` on your machine. For just *running* MapControl, Docker is the way.)

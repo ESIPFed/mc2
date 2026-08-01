@@ -1,11 +1,19 @@
+# MapControl — recommended compose setup.
+# Minimal and production variants: docs/deployment.md
 services:
-  server:
-    build: .
+  mapcontrol:
+    image: ghcr.io/esipfed/mc2:latest
+    # Contributors: build locally instead of pulling the published image.
+    # build: .
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./server/config.toml:/app/server/config.toml:ro
+      - ./data:/app/data                      # maps + uploads survive restarts
     environment:
-      - MAPCONTROL_DB_PATH=/app/data/mapcontrol.db
-      - MAPCONTROL_FILE_DIR=/app/data/files
+      MAPCONTROL_DB_PATH: /app/data/mapcontrol.db
+      MAPCONTROL_FILE_DIR: /app/data/files
+      # The origin baked into every shared map link — set for off-machine use:
+      # MAPCONTROL_PUBLIC_URL: https://maps.example.org
+      # Unlocks the MapTiler basemaps (vector streets, hybrid, topo, dataviz):
+      # MAPTILER_API_KEY: ${MAPTILER_API_KEY}
+    restart: unless-stopped
