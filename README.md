@@ -51,7 +51,7 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 | [`server/`](server/) | FastAPI server — REST API, WebSocket hub, MCP server, GeoTIFF & screenshot services, auth portal |
 | [`sdk/`](sdk/) | `mapcontrol` — typed Python client SDK |
 | [`examples/`](examples/) | Runnable demo scripts (shapes, terrain, glyphs, GeoTIFFs) + sample data |
-| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison |
+| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison, Puppeteer animation skills |
 | [`deploy/`](deploy/) | Deployment helpers (local PyPI index for the SDK) |
 
 ## Quick start
@@ -205,6 +205,11 @@ python examples/demo_glyphs.py             # glyph markers & labels
 ```
 
 Sample GeoTIFFs live in [`examples/data/`](examples/data/).
+
+Want to drive the map from a **browser** instead of Python — for camera animations,
+recorded flythroughs, or screenshot capture? See the reference
+**[Puppeteer animation skills](docs/puppeteer-skills/)** (ballistic flyTo tours, 3D terrain
+orbits, keyframe stills, frame-sequence recording).
 
 ## Running tests
 
