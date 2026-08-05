@@ -11,6 +11,8 @@
 [![ESIP](https://img.shields.io/badge/ESIP-Federation-1B6CA8)](https://www.esipfed.org/)
 
 ---
+![Demo: Flyover to  Matterhorn](docs/output2.gif)
+---
 
 Ask your AI assistant to *"draw the burn scar over Los Alamos and fly the camera to it"* — and watch it happen live in a browser tab. MapControl is a headless map server with a real-time MapLibre frontend: create maps, add GeoJSON and GeoTIFF overlays, animate the camera, switch basemaps and themes, take screenshots — over a **Python SDK**, a **REST API**, or the **Model Context Protocol** for Claude, Cline, and any other MCP client.
 
