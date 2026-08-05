@@ -30,7 +30,7 @@ from .routers import maps, sessions, events, assets, files
 # MCP layer (Phase 0 of .vision-documents/mcp-compliance-roadmap.md): an in-process
 # Model Context Protocol server mounted at /mcp (Streamable HTTP). It wraps the
 # SAME service functions the REST API uses — additive, no separate state.
-from .mcp_tools import mcp_server
+from .mcp_tools import mcp_server, _internal_base_url
 
 # MCP Resources layer (roadmap §6, partial): the map:// resource taxonomy.
 # Importing the module registers every resource template on mcp_server —
@@ -2617,8 +2617,10 @@ async def take_screenshot(
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e))
     else:
-        # Default path: Playwright headless screenshot
-        map_url = f"{base_url}/map/{map_id}?user_session={user_session_id}"
+        # Default path: Playwright headless screenshot. Chromium runs on this
+        # host and must self-navigate over loopback on the bound port — the
+        # request base_url may be a public/proxy origin unreachable from here.
+        map_url = f"{_internal_base_url()}/map/{map_id}?user_session={user_session_id}"
         try:
             result = await screenshot_service.take_screenshot_playwright(
                 map_url=map_url,

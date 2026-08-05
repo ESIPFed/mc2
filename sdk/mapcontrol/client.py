@@ -12,13 +12,13 @@ class MapControl:
     """Client for the Map Control proxy server.
 
     Usage:
-        mc = MapControl(server_url="http://localhost:8080")
+        mc = MapControl(server_url="http://localhost:8000")
         session = mc.create_map()
         print(session.url)
         session.add_polygon(geojson='{"type":"Feature",...}')
     """
 
-    def __init__(self, server_url: str = "http://localhost:8080"):
+    def __init__(self, server_url: str = "http://localhost:8000"):
         self.server_url = server_url.rstrip("/")
         self._client = httpx.Client(base_url=self.server_url, timeout=30.0)
 

@@ -6,7 +6,7 @@ Creates a map, opens it in your browser, then walks through
 the features one by one with pauses so you can watch it happen.
 
 Prerequisites:
-  - Server running: docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8080)
+  - Server running: docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8000)
   - SDK installed: cd sdk && pip install -e .
 
 Usage:
@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk"))
 
 from mapcontrol import MapControl, Style
 
-SERVER_URL = "http://localhost:8080"
+SERVER_URL = "http://localhost:8000"
 PAUSE = 3  # seconds between actions
 
 

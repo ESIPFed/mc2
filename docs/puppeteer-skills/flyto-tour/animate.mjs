@@ -3,7 +3,7 @@
 //
 //   MAP_ID=<map_id> node animate.mjs
 //
-// Requires a running server (default http://localhost:8080, override with
+// Requires a running server (default http://localhost:8000, override with
 // MAPCONTROL_SERVER) and an existing map_id. See ../README.md.
 
 import { openMap, cameraMove, sleep } from "../lib/esip-map.mjs";

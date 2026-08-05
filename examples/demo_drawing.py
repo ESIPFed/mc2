@@ -1,7 +1,7 @@
 """Drawing tools demo — shows how to use the SDK to enable drawing and retrieve drawn features.
 
 Run the server first:
-    docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8080)
+    docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8000)
 
 Then run this demo:
     python demo_drawing.py
@@ -21,7 +21,7 @@ import webbrowser
 
 from mapcontrol import MapControl
 
-SERVER = "http://localhost:8080"
+SERVER = "http://localhost:8000"
 
 
 def main():

@@ -18,7 +18,7 @@ pip install mapcontrol
 ```python
 from mapcontrol import MapControl
 
-mc = MapControl(server_url="http://localhost:8080")
+mc = MapControl(server_url="http://localhost:8000")
 session = mc.create_map(name="demo")
 print(session.map_url)          # open this in a browser — updates live
 
@@ -43,7 +43,7 @@ shot = session.take_screenshot()  # PNG of the current view
 The server ships as a container:
 
 ```bash
-docker run -p 8080:8080 ghcr.io/ama-labs/mapcontrol-server:latest
+docker run -p 8000:8000 ghcr.io/ama-labs/mapcontrol-server:latest
 ```
 
 See the server repository for configuration (basemaps, providers, auth, MCP).

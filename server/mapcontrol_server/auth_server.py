@@ -86,7 +86,7 @@ def _public_base() -> str:
     return (
         os.environ.get("MAPCONTROL_MCP_RESOURCE")
         or os.environ.get("MAPCONTROL_PUBLIC_URL")
-        or "http://localhost:8080"
+        or "http://localhost:8000"
     ).rstrip("/")
 
 

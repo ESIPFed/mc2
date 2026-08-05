@@ -36,21 +36,21 @@ You also need a **map to point at**. Create one first (any of the usual ways) an
 
 ```bash
 # Minimal: create a map over REST and read back the id
-curl -s -X POST http://localhost:8080/api/maps | python3 -c "import sys,json; print(json.load(sys.stdin)['map_id'])"
+curl -s -X POST http://localhost:8000/api/maps | python3 -c "import sys,json; print(json.load(sys.stdin)['map_id'])"
 ```
 
 or from the Python SDK:
 
 ```python
 from mapcontrol import MapControl
-session = MapControl("http://localhost:8080").create_map()
+session = MapControl("http://localhost:8000").create_map()
 print(session.map_id)   # feed this to MAP_ID below
 ```
 
 The map URL every skill opens is:
 
 ```
-http://localhost:8080/map/<MAP_ID>?ui=none
+http://localhost:8000/map/<MAP_ID>?ui=none
 ```
 
 `ui=none` serves the **naked canvas** (no picker, no draw tools) — the cleanest frame for a

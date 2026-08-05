@@ -8,7 +8,7 @@
 
 import puppeteer from "puppeteer";
 
-const DEFAULT_SERVER = process.env.MAPCONTROL_SERVER || "http://localhost:8080";
+const DEFAULT_SERVER = process.env.MAPCONTROL_SERVER || "http://localhost:8000";
 
 /**
  * Open a map and wait until it is ready to animate.
