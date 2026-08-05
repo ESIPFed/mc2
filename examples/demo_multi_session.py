@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk"))
 
 from mapcontrol import MapControl, Style
 
-SERVER_URL = "http://localhost:8000"
+SERVER_URL = "http://localhost:8080"
 PAUSE = 3
 
 

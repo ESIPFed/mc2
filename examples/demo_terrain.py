@@ -5,7 +5,7 @@ Shows the map in 2D (default), zooms to a mountainous area,
 then toggles to 3D with terrain and sky, waits, then back to 2D.
 
 Usage:
-    # Start server first:  docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8000)
+    # Start server first:  docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8080)
     # Then run:
     python demo_terrain.py
 """
@@ -15,7 +15,7 @@ import webbrowser
 
 from mapcontrol import MapControl
 
-SERVER = "http://localhost:8000"
+SERVER = "http://localhost:8080"
 
 
 def main():

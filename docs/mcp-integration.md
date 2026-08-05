@@ -247,14 +247,14 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
         "/absolute/path/to/mapcontrol-mcp/build/index.js"
       ],
       "env": {
-        "MAPCONTROL_SERVER_URL": "http://<EC2_PUBLIC_IP>:8000"
+        "MAPCONTROL_SERVER_URL": "http://<EC2_PUBLIC_IP>:8080"
       }
     }
   }
 }
 ```
 
-Replace `<EC2_PUBLIC_IP>` with the actual public IP of your EC2 instance (e.g., `http://100.53.219.245:8000`).
+Replace `<EC2_PUBLIC_IP>` with the actual public IP of your EC2 instance (e.g., `http://100.53.219.245:8080`).
 
 ### Cline / VS Code
 

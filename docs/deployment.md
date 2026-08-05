@@ -12,15 +12,15 @@ setup, and explains what every knob does to the map.
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:latest
-    ports: ["8000:8000"]
+    ports: ["8080:8080"]
 ```
 
 ```bash
 docker compose up -d
-curl http://localhost:8000/docs   # up?
+curl http://localhost:8080/docs   # up?
 ```
 
-You get: the live map UI, the REST API, and `/mcp` — all on port 8000.
+You get: the live map UI, the REST API, and `/mcp` — all on port 8080.
 You don't get: persistence (maps vanish when the container is removed),
 working share links off this machine, or the premium basemaps.
 
@@ -30,7 +30,7 @@ working share links off this machine, or the premium basemaps.
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:latest
-    ports: ["8000:8000"]
+    ports: ["8080:8080"]
     volumes:
       - ./data:/app/data                          # maps survive restarts
     environment:
@@ -54,7 +54,7 @@ link and screenshot URL. Leave it unset and links point at `localhost`
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:sha-2920da5     # pin a digest for deployments
-    ports: ["8000:8000"]
+    ports: ["8080:8080"]
     volumes:
       - ./data:/app/data
       - ./config.toml:/app/server/config.toml:ro   # your own map defaults
@@ -77,7 +77,7 @@ and `vX.Y.Z` tags appear on releases.
 | `MAPTILER_API_KEY` | Adds the MapTiler basemaps (vector streets, hybrid, topo, dataviz, satellite-dark) to the basemap picker and to `set_basemap`. Without it you still get the keyless three: OSM, Esri Satellite, Carto Dark. |
 | `MAPCONTROL_DB_PATH` | Where the SQLite database lives — maps, assets, the full event log that replays when someone opens a map URL. |
 | `MAPCONTROL_FILE_DIR` | Where uploaded GeoTIFFs and rendered raster tiles are stored. |
-| `MAPCONTROL_PORT` / `MAPCONTROL_HOST` | Bind address inside the container (default `0.0.0.0:8000`). Usually you change the compose port mapping instead. |
+| `MAPCONTROL_PORT` / `MAPCONTROL_HOST` | Bind address inside the container (default `0.0.0.0:8080`). Usually you change the compose port mapping instead. |
 | `MAPCONTROL_ROOT_PATH` | Serve under a path prefix (e.g. `/maps`) behind a reverse proxy. Rewrites every route and generated link accordingly. |
 | `MAPCONTROL_CONFIG_PATH` | Point at an alternative `config.toml`. |
 | `MAPCONTROL_AUTH_MODE` | Turns on authorization for `/mcp` (`standalone` runs the built-in portal). Off by default — anyone who can reach the server can drive maps. |
@@ -102,13 +102,13 @@ Grab the stock file as a starting point:
 
 ## Behind a reverse proxy
 
-Point your proxy at port 8000 and make sure **WebSocket upgrades pass
+Point your proxy at port 8080 and make sure **WebSocket upgrades pass
 through** — the live map updates ride `/ws/...`. Set
 `MAPCONTROL_PUBLIC_URL` to the proxy's public origin.
 
 ```caddyfile
 maps.example.org {
-    reverse_proxy mapcontrol:8000
+    reverse_proxy mapcontrol:8080
 }
 ```
 

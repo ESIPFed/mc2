@@ -27,7 +27,7 @@ SETUP
     pip install "git+https://github.com/ESIPFed/mc2.git#subdirectory=sdk"
 
     from mapcontrol import MapControl
-    mc = MapControl("http://localhost:8000")   # or any MapControl server URL
+    mc = MapControl("http://localhost:8080")   # or any MapControl server URL
     session = mc.create_map()                  # theme="auto"|"dark"|"light"
     print(session.url)                         # ALWAYS print this — it is the deliverable
     # reattach to an existing map: session = mc.connect_map(map_id)

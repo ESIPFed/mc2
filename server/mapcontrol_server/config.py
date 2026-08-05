@@ -18,7 +18,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config.toml"
 @dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8080  ## changed this to 8080 because port 8000 will clash with some mac airport utility
     # ASGI mount prefix for deployment behind a single-origin reverse proxy
     # that exposes this server under a sub-path (e.g. "/service/map"). Empty =
     # served at root. Dual-deployability invariant (EOGPT-Roadmap ADR-0001): the
