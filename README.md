@@ -64,7 +64,7 @@ All you need is [Docker](https://docs.docker.com/get-docker/) — the published 
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:latest
-    ports: ["8000:8000"]
+    ports: ["8080:8080"]
 ```
 
 ```bash
@@ -74,7 +74,7 @@ docker compose up -d
 **Verify it's up:**
 
 ```bash
-curl http://localhost:8000/docs   # interactive API docs
+curl http://localhost:8080/docs   # interactive API docs
 ```
 
 That's the whole install. Want maps that survive restarts, share links that work off your machine, or premium basemaps? See **[docs/deployment.md](docs/deployment.md)** — it walks from this minimal setup to a full production config and explains what every knob does. (Contributors: `git clone` this repo and `docker compose up --build` builds the image locally.)
@@ -89,8 +89,8 @@ pip install "git+https://github.com/ESIPFed/mc2.git#subdirectory=sdk"
 
 ```python
 from mapcontrol import MapControl
-
-mc = MapControl("http://localhost:8000")
+import httpx
+mc = MapControl("http://localhost:8080")
 session = mc.create_map()
 print(session.url)   # ← open this in a browser; it updates live
 
@@ -113,6 +113,10 @@ session.set_basemap("satellite")
 session.set_theme("dark")
 
 shot = session.take_screenshot()   # PNG of the current view
+png = httpx.get(shot.full_url).content
+with open(shot.filename, "wb") as f:
+    f.write(png)
+
 ```
 
 Watch the browser tab while the script runs — every call lands on the shared map live.
@@ -127,7 +131,7 @@ The MCP server is mounted **in-process** at `/mcp` (Streamable HTTP — the curr
 {
   "mcpServers": {
     "mapcontrol": {
-      "url": "http://localhost:8000/mcp"
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
@@ -217,7 +221,7 @@ docker compose run --rm mapcontrol python tests/test_mcp_auth.py   # MCP authori
 
 | Symptom | Fix |
 |---|---|
-| `port is already allocated` on start | Something else is on 8000. Change the compose mapping to e.g. `"8010:8000"` and point the SDK at `http://localhost:8010`. |
+| `port is already allocated` on start | Something else is on 8080. Change the compose mapping to e.g. `"8010:8080"` and point the SDK at `http://localhost:8010`. |
 | Shared map links point at `localhost` | Set `MAPCONTROL_PUBLIC_URL` to your server's public URL so map links work off-machine. |
 | Maps vanish after container restart | Keep the `./data` volume mount from `docker-compose.yml` — SQLite and uploaded files live there. |
 

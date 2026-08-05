@@ -169,9 +169,9 @@ def _public_base_url() -> str:
     """Base URL used to build returned map/screenshot URLs.
 
     Defaults to localhost for dev; set MAPCONTROL_PUBLIC_URL on the deployment
-    (e.g. http://18.116.107.200:8000) so create_map returns a reachable link.
+    (e.g. http://18.116.107.200:8080) so create_map returns a reachable link.
     """
-    return os.environ.get("MAPCONTROL_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+    return os.environ.get("MAPCONTROL_PUBLIC_URL", "http://localhost:8080").rstrip("/")
 
 
 # ─── map:// URI helpers (single source for the resource scheme) ──────────────

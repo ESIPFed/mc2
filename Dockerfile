@@ -28,8 +28,8 @@ COPY examples/data/ examples/data/
 # Create data directories for SQLite + rendered files
 RUN mkdir -p /app/data /app/server/data/files
 
-EXPOSE 8000
+EXPOSE 8080
 
 WORKDIR /app/server
 
-CMD ["uvicorn", "mapcontrol_server.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "mapcontrol_server.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

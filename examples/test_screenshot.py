@@ -3,7 +3,7 @@
 import httpx
 import json
 
-BASE = "http://localhost:8000"
+BASE = "http://localhost:8080"
 
 print("=== Screenshot Test (Playwright, no browser) ===\n")
 
