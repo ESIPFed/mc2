@@ -7,7 +7,7 @@ Phase 3: 3D globe zoom-out + ballistic zoom tour (Budapest -> Dallas -> Izmir)
 
 Usage:
     # Start server first:
-    docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8080)
+    docker compose up  (or: cd server && uvicorn mapcontrol_server.main:app --reload --port 8000)
 
     # Then run:
     python demo_terrain_showcase.py
@@ -21,7 +21,7 @@ import httpx
 
 from mapcontrol import MapControl
 
-SERVER = "http://localhost:8080"
+SERVER = "http://localhost:8000"
 
 # sample.tif lives in the repo at examples/data/sample.tif
 SAMPLE_TIFF = os.path.join(os.path.dirname(__file__), "data", "sample.tif")

@@ -12,10 +12,10 @@ MapControl server, via the public REST events API (no SDK required):
 
 Usage:
     # In one terminal (from server/):
-    uv run uvicorn mapcontrol_server.main:app --port 8080
+    uv run uvicorn mapcontrol_server.main:app --port 8000
 
     # In another:
-    python3 demo_glyphs.py [--server http://localhost:8080] [--fast]
+    python3 demo_glyphs.py [--server http://localhost:8000] [--fast]
 
 The script opens the map in your browser and walks through the scenes with
 pauses so you can watch. Hover over the gradient rings in Scene 4 to see the
@@ -32,7 +32,7 @@ import webbrowser
 import requests
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--server", default="http://localhost:8080")
+parser.add_argument("--server", default="http://localhost:8000")
 parser.add_argument("--fast", action="store_true", help="minimal pauses")
 args = parser.parse_args()
 
@@ -54,7 +54,7 @@ try:
     r.raise_for_status()
 except Exception as e:
     print(f"❌ MapControl server not reachable at {SERVER} ({e})")
-    print("   Start it with:  cd server && uv run uvicorn mapcontrol_server.main:app --port 8080")
+    print("   Start it with:  cd server && uv run uvicorn mapcontrol_server.main:app --port 8000")
     sys.exit(1)
 print(f"✅ Server up at {SERVER}")
 

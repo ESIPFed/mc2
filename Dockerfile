@@ -40,4 +40,4 @@ EXPOSE 8000
 
 WORKDIR /app/server
 
-CMD ["uvicorn", "mapcontrol_server.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "mapcontrol_server.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

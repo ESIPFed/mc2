@@ -27,7 +27,7 @@ Given those, FastMCP automatically:
 > (``https://<host>/.well-known/oauth-protected-resource/service/map``). The
 > single-origin edge currently routes origin-root ``/`` → Svelte, so BEFORE
 > enabling auth in cloud the edge needs a location for
-> ``/.well-known/oauth-protected-resource`` → ESIP (``172.17.0.1:8080``).
+> ``/.well-known/oauth-protected-resource`` → ESIP (``172.17.0.1:8000``).
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def _resource_url() -> str:
     return (
         os.environ.get("MAPCONTROL_MCP_RESOURCE")
         or os.environ.get("MAPCONTROL_PUBLIC_URL")
-        or "http://localhost:8080"
+        or "http://localhost:8000"
     ).rstrip("/")
 
 

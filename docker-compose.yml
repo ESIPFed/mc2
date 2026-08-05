@@ -6,7 +6,7 @@ services:
     # Contributors: build locally instead of pulling the published image.
     # build: .
     ports:
-      - "8080:8080"
+      - "8000:8000"
     volumes:
       - ./data:/app/data                      # maps + uploads survive restarts
     environment:

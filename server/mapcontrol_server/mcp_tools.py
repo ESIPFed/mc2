@@ -169,9 +169,23 @@ def _public_base_url() -> str:
     """Base URL used to build returned map/screenshot URLs.
 
     Defaults to localhost for dev; set MAPCONTROL_PUBLIC_URL on the deployment
-    (e.g. http://18.116.107.200:8080) so create_map returns a reachable link.
+    (e.g. http://18.116.107.200:8000) so create_map returns a reachable link.
     """
-    return os.environ.get("MAPCONTROL_PUBLIC_URL", "http://localhost:8080").rstrip("/")
+    return os.environ.get("MAPCONTROL_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+
+
+def _internal_base_url() -> str:
+    """Loopback URL used for server self-navigation (headless screenshots).
+
+    Chromium runs on the same host/container as the server, so it must reach the
+    service over loopback on the *bound* port. _public_base_url() can be an
+    external address or reverse-proxy origin (via MAPCONTROL_PUBLIC_URL) that
+    does not resolve back to this process from inside the container — e.g.
+    "localhost:8080" inside the container points at the container itself, where
+    the app may be listening on a different port. Public URLs stay in
+    _public_base_url() for links handed back to external clients.
+    """
+    return f"http://127.0.0.1:{load_config().server.port}"
 
 
 def _internal_base_url() -> str:
