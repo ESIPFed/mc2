@@ -66,6 +66,7 @@ All you need is [Docker](https://docs.docker.com/get-docker/) — the published 
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:latest
+    platform: "linux/amd64"
     ports: ["8000:8000"]
 ```
 
