@@ -30,7 +30,7 @@ from .routers import maps, sessions, events, assets, files
 # MCP layer (Phase 0 of .vision-documents/mcp-compliance-roadmap.md): an in-process
 # Model Context Protocol server mounted at /mcp (Streamable HTTP). It wraps the
 # SAME service functions the REST API uses — additive, no separate state.
-from .mcp_tools import mcp_server
+from .mcp_tools import mcp_server, _internal_base_url
 
 # MCP Resources layer (roadmap §6, partial): the map:// resource taxonomy.
 # Importing the module registers every resource template on mcp_server —
@@ -944,6 +944,28 @@ async def serve_map(map_id: str, request: Request):
             return (style && style[prop]) || fallback;
         }}
 
+        // Atmospheric sky for 3D/globe terrain modes. MapLibre GL JS has no
+        // `sky` *layer* type (that is Mapbox's API) — it uses map.setSky().
+        // Adding a `type: 'sky'` layer fails style validation and, because the
+        // error is fired on the map's error event rather than thrown, a
+        // try/catch around addLayer cannot suppress it. setSky is the correct,
+        // validation-clean API (MapLibre 5+).
+        function enableSky() {{
+            try {{
+                map.setSky({{
+                    'sky-color': '#199EF3',
+                    'sky-horizon-blend': 0.5,
+                    'horizon-color': '#ffffff',
+                    'horizon-fog-blend': 0.5,
+                    'fog-color': '#ffffff',
+                    'fog-ground-blend': 0.5,
+                }});
+            }} catch(e) {{ /* setSky unsupported in this MapLibre version */ }}
+        }}
+        function disableSky() {{
+            try {{ map.setSky(undefined); }} catch(e) {{}}
+        }}
+
         // Compute LngLatBounds from a GeoJSON object
         function geojsonBounds(geojson) {{
             const bounds = new maplibregl.LngLatBounds();
@@ -1833,11 +1855,7 @@ async def serve_map(map_id: str, request: Request):
                 try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
                 ensureTerrainSource();
                 try {{ map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }}); }} catch(e) {{}}
-                try {{
-                    if (!map.getLayer('sky-layer')) {{
-                        map.addLayer({{ id: 'sky-layer', type: 'sky', paint: {{ 'sky-type': 'atmosphere', 'sky-atmosphere-sun': [0.0, 90.0], 'sky-atmosphere-sun-intensity': 15 }} }});
-                    }}
-                }} catch(e) {{}}
+                enableSky();
             }}
             try {{
                 map.jumpTo({{
@@ -1911,12 +1929,12 @@ async def serve_map(map_id: str, request: Request):
                 try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
                 ensureTerrainSource();
                 map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                try {{ if (!map.getLayer('sky-layer')) {{ map.addLayer({{ id: 'sky-layer', type: 'sky', paint: {{ 'sky-type': 'atmosphere', 'sky-atmosphere-sun': [0.0, 90.0], 'sky-atmosphere-sun-intensity': 15 }} }}); }} }} catch(e) {{ /* sky layers not supported in this MapLibre version */ }}
+                enableSky();
             }} else if (snapshot.terrain === '2d') {{
                 currentTerrain = '2d';
                 try {{ map.setProjection({{ type: 'mercator' }}); }} catch(e) {{}}
                 map.setTerrain(null);
-                try {{ if (map.getLayer('sky-layer')) map.removeLayer('sky-layer'); }} catch(e) {{}}
+                disableSky();
             }}
             // Terrain restore may have changed projection — re-arbitrate
             // deck-ribbon vs flat-line for any restored arcs.
@@ -2090,7 +2108,7 @@ async def serve_map(map_id: str, request: Request):
                     try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
                     ensureTerrainSource();
                     map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                    try {{ if (!map.getLayer('sky-layer')) {{ map.addLayer({{ id: 'sky-layer', type: 'sky', paint: {{ 'sky-type': 'atmosphere', 'sky-atmosphere-sun': [0.0, 90.0], 'sky-atmosphere-sun-intensity': 15 }} }}); }} }} catch(e) {{ /* sky layers not supported */ }}
+                    enableSky();
                     // Force nadir (straight down) — pitch=0, bearing=0
                     map.jumpTo({{ pitch: 0, bearing: 0 }});
                     console.log('Applied default terrain mode: 3D Globe (nadir, pitch=0)');
@@ -2331,8 +2349,8 @@ async def serve_map(map_id: str, request: Request):
                 try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{ console.warn('Globe projection not available:', e.message); }}
                 ensureTerrainSource();
                 map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                // Add sky layer for atmospheric effect
-                try {{ if (!map.getLayer('sky-layer')) {{ map.addLayer({{ id: 'sky-layer', type: 'sky', paint: {{ 'sky-type': 'atmosphere', 'sky-atmosphere-sun': [0.0, 90.0], 'sky-atmosphere-sun-intensity': 15 }} }}); }} }} catch(e) {{ /* sky layers not supported in this MapLibre version */ }}
+                // Atmospheric sky for the 3D view
+                enableSky();
                 if (animate) {{
                     map.easeTo({{ pitch: 60, duration: 1500 }});
                 }} else {{
@@ -2347,12 +2365,12 @@ async def serve_map(map_id: str, request: Request):
                     // Remove terrain after animation completes
                     setTimeout(function() {{
                         map.setTerrain(null);
-                        try {{ if (map.getLayer('sky-layer')) map.removeLayer('sky-layer'); }} catch(e) {{}}
+                        disableSky();
                     }}, 1600);
                 }} else {{
                     map.jumpTo({{ pitch: 0, bearing: 0 }});
                     map.setTerrain(null);
-                    try {{ if (map.getLayer('sky-layer')) map.removeLayer('sky-layer'); }} catch(e) {{}}
+                    disableSky();
                 }}
                 console.log('Terrain mode: 2D Flat (mercator)');
             }}
@@ -2599,8 +2617,10 @@ async def take_screenshot(
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e))
     else:
-        # Default path: Playwright headless screenshot
-        map_url = f"{base_url}/map/{map_id}?user_session={user_session_id}"
+        # Default path: Playwright headless screenshot. Chromium runs on this
+        # host and must self-navigate over loopback on the bound port — the
+        # request base_url may be a public/proxy origin unreachable from here.
+        map_url = f"{_internal_base_url()}/map/{map_id}?user_session={user_session_id}"
         try:
             result = await screenshot_service.take_screenshot_playwright(
                 map_url=map_url,

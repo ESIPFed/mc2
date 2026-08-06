@@ -11,6 +11,8 @@
 [![ESIP](https://img.shields.io/badge/ESIP-Federation-1B6CA8)](https://www.esipfed.org/)
 
 ---
+![Demo: Flyover to  Matterhorn](docs/output2.gif)
+---
 
 Ask your AI assistant to *"draw the burn scar over Los Alamos and fly the camera to it"* — and watch it happen live in a browser tab. MapControl is a headless map server with a real-time MapLibre frontend: create maps, add GeoJSON and GeoTIFF overlays, animate the camera, switch basemaps and themes, take screenshots — over a **Python SDK**, a **REST API**, or the **Model Context Protocol** for Claude, Cline, and any other MCP client.
 
@@ -51,7 +53,7 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 | [`server/`](server/) | FastAPI server — REST API, WebSocket hub, MCP server, GeoTIFF & screenshot services, auth portal |
 | [`sdk/`](sdk/) | `mapcontrol` — typed Python client SDK |
 | [`examples/`](examples/) | Runnable demo scripts (shapes, terrain, glyphs, GeoTIFFs) + sample data |
-| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison |
+| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison, Puppeteer animation skills |
 | [`deploy/`](deploy/) | Deployment helpers (local PyPI index for the SDK) |
 
 ## Quick start
@@ -70,6 +72,8 @@ services:
 ```bash
 docker compose up -d
 ```
+
+> **Port 8000 already taken on your machine?** (`lsof -i :8000` shows what's using it.) Remap only the *host* side and leave the container port unchanged — `ports: ["8080:8000"]` — then reach it at `http://localhost:8080`. Keep the container on 8000: the image binds 8000 and self-navigates there for screenshots, so changing the container side would break them.
 
 **Verify it's up:**
 
@@ -201,6 +205,11 @@ python examples/demo_glyphs.py             # glyph markers & labels
 ```
 
 Sample GeoTIFFs live in [`examples/data/`](examples/data/).
+
+Want to drive the map from a **browser** instead of Python — for camera animations,
+recorded flythroughs, or screenshot capture? See the reference
+**[Puppeteer animation skills](docs/puppeteer-skills/)** (ballistic flyTo tours, 3D terrain
+orbits, keyframe stills, frame-sequence recording).
 
 ## Running tests
 

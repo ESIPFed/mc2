@@ -174,6 +174,20 @@ def _public_base_url() -> str:
     return os.environ.get("MAPCONTROL_PUBLIC_URL", "http://localhost:8000").rstrip("/")
 
 
+def _internal_base_url() -> str:
+    """Loopback URL used for server self-navigation (headless screenshots).
+
+    Chromium runs on the same host/container as the server, so it must reach the
+    service over loopback on the *bound* port. _public_base_url() can be an
+    external address or reverse-proxy origin (via MAPCONTROL_PUBLIC_URL) that
+    does not resolve back to this process from inside the container — e.g.
+    "localhost:8080" inside the container points at the container itself, where
+    the app may be listening on a different port. Public URLs stay in
+    _public_base_url() for links handed back to external clients.
+    """
+    return f"http://127.0.0.1:{load_config().server.port}"
+
+
 # ─── map:// URI helpers (single source for the resource scheme) ──────────────
 # Canonical URIs for the Resources layer (mcp_resources.py imports these; they
 # live here so mcp_resources -> mcp_tools stays a one-way import).
@@ -899,7 +913,10 @@ async def take_screenshot(
     """
     await _require_map(map_id)
     base = _public_base_url()
-    map_url = f"{base}/map/{map_id}"
+    # Chromium navigates to the map over loopback (self-navigation), NOT the
+    # public URL — see _internal_base_url(). `base` is still used below for the
+    # URLs returned to the client.
+    map_url = f"{_internal_base_url()}/map/{map_id}"
     if user_session_id:
         map_url += f"?user_session={user_session_id}"
 

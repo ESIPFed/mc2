@@ -8,6 +8,7 @@ build/
 *.egg
 .eggs/
 *.so
+*.log
 
 # Virtual environments
 .venv/
