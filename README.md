@@ -60,13 +60,12 @@ Think of it as the Star Trek computer's map console. You say the words; the map 
 
 ### 1. Run the server
 
-All you need is [Docker](https://docs.docker.com/get-docker/) — the published image bundles everything else (Python, GDAL, a headless Chromium for screenshots). No clone required. Save this as `docker-compose.yml`:
+All you need is [Docker](https://docs.docker.com/get-docker/) — the published image bundles everything else (Python, GDAL, a headless Chromium for screenshots) and is published multi-arch (`linux/amd64` + `linux/arm64`), so it runs natively on Intel and Apple-Silicon machines alike. No clone required. Save this as `docker-compose.yml`:
 
 ```yaml
 services:
   mapcontrol:
     image: ghcr.io/esipfed/mc2:latest
-    platform: "linux/amd64"
     ports: ["8000:8000"]
 ```
 

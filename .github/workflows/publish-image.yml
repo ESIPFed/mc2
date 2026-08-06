@@ -1,6 +1,15 @@
 name: Build and Publish Container Image
 
-# Publishes ghcr.io/esipfed/mc2 from main (and version tags).
+# Publishes ghcr.io/esipfed/mc2 from main (and version tags) as a MULTI-ARCH
+# image (linux/amd64 + linux/arm64), so `docker pull` Just Works on Intel and
+# Apple-Silicon machines alike — no `platform:` override needed in compose.
+#
+# Shape: a matrix job builds each architecture NATIVELY (ubuntu-latest for
+# amd64, ubuntu-24.04-arm for arm64 — no QEMU emulation), runs the MCP
+# conformance gates INSIDE that arch's image, then pushes it by digest.
+# A small merge job stitches the per-arch digests into one multi-arch
+# manifest and applies the human-readable tags. PRs stop at the gates
+# (nothing is pushed).
 #
 # Auth: the workflow-scoped GITHUB_TOKEN with `packages: write` — no PAT.
 # The first successful push auto-creates the GHCR package, links it to this
@@ -20,8 +29,17 @@ env:
   IMAGE_NAME: ghcr.io/esipfed/mc2
 
 jobs:
-  build-test-push:
-    runs-on: ubuntu-latest
+  # ---------- Per-arch: build natively, gate, push by digest ---------- #
+  build-and-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -30,11 +48,123 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # Sanitized platform string (linux/amd64 -> linux-amd64) for cache
+      # scopes and artifact names, which don't allow slashes.
+      - name: Prepare platform slug
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_SLUG=${platform//\//-}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # OCI labels only here — the human-readable tags are applied by the
+      # merge job on the finished multi-arch manifest.
+      - name: Compute image metadata (labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+
+      # Build first and `load` into the runner's daemon so the conformance
+      # gates below run against the EXACT artifact we're about to ship
+      # (same layers, same digest — the digest push below is a pure cache
+      # hit, not a rebuild).
+      - name: Build image (load for the conformance gates)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.IMAGE_NAME }}:gate
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_SLUG }}
+
+      # ---------- MCP conformance + auth gates ---------- #
+      # Run the acceptance suites INSIDE the freshly built image — against the
+      # deployable artifact with the real runtime env (GDAL, mcp SDK, pyjwt),
+      # once per architecture, on native hardware. Each suite runs in its own
+      # container so the Streamable-HTTP session manager's once-per-process
+      # run() never collides. A failure here fails the job and BLOCKS the
+      # push step below.
+      - name: MCP conformance gate (tools/protocol/errors/root-path)
+        run: |
+          timeout 120 docker run --rm --workdir /app/server \
+            ${{ env.IMAGE_NAME }}:gate \
+            python tests/test_mcp.py
+
+      - name: MCP authorization gate (§5b Resource Server)
+        run: |
+          timeout 120 docker run --rm --workdir /app/server \
+            ${{ env.IMAGE_NAME }}:gate \
+            python tests/test_mcp_auth.py
+
+      - name: MCP standalone auth portal gate
+        run: |
+          timeout 120 docker run --rm --workdir /app/server \
+            ${{ env.IMAGE_NAME }}:gate \
+            python tests/test_portal.py
+
+      # ---------- Push by digest (main + tags only; PRs stop above) ---------- #
+      # push-by-digest uploads the arch image WITHOUT a tag; the merge job
+      # assembles the digests into the tagged multi-arch manifest.
+      - name: Push image by digest
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.push.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_SLUG }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------- Merge per-arch digests into one multi-arch manifest ---------- #
+  merge-manifest:
+    if: github.event_name != 'pull_request'
+    needs: build-and-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -54,61 +184,18 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
 
-      # Build first and `load` into the runner's daemon so the conformance
-      # gates below run against the EXACT artifact we're about to ship
-      # (same layers, same digest). Single-platform so `load` works.
-      - name: Build image (load for the conformance gates)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          load: true
-          platforms: linux/amd64
-          tags: ${{ env.IMAGE_NAME }}:gate
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ---------- MCP conformance + auth gates ---------- #
-      # Run the acceptance suites INSIDE the freshly built image — against the
-      # deployable artifact with the real runtime env (GDAL, mcp SDK, pyjwt).
-      # Each suite runs in its own container so the Streamable-HTTP session
-      # manager's once-per-process run() never collides. A failure here fails
-      # the job and BLOCKS the push step below.
-      - name: MCP conformance gate (tools/protocol/errors/root-path)
+      - name: Create multi-arch manifest and push tags
+        working-directory: ${{ runner.temp }}/digests
         run: |
-          timeout 120 docker run --rm --workdir /app/server \
-            ${{ env.IMAGE_NAME }}:gate \
-            python tests/test_mcp.py
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
-      - name: MCP authorization gate (§5b Resource Server)
+      - name: Inspect + summary
         run: |
-          timeout 120 docker run --rm --workdir /app/server \
-            ${{ env.IMAGE_NAME }}:gate \
-            python tests/test_mcp_auth.py
-
-      - name: MCP standalone auth portal gate
-        run: |
-          timeout 120 docker run --rm --workdir /app/server \
-            ${{ env.IMAGE_NAME }}:gate \
-            python tests/test_portal.py
-
-      # ---------- Push (main + tags only; PRs stop at the gates) ---------- #
-      - name: Push image to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-
-      - name: Image summary
-        if: github.event_name != 'pull_request'
-        run: |
+          docker buildx imagetools inspect "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
           {
-            echo "### Published :package:"
+            echo "### Published :package: (multi-arch: linux/amd64 + linux/arm64)"
             echo ""
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
