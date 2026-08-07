@@ -10,7 +10,7 @@
 [![MapLibre](https://img.shields.io/badge/MapLibre-GL-396CB2?logo=maplibre&logoColor=white)](https://maplibre.org/)
 [![ESIP](https://img.shields.io/badge/ESIP-Federation-1B6CA8)](https://www.esipfed.org/)
 
-<!-- VIDEO-BANNER: replace this line with the bare github user-attachments URL for the demo video (drag the mp4 into the PR description to get one) -->
+https://github.com/user-attachments/assets/d0adcfcd-61bb-419c-8b85-3a405d4a5453
 
 **MapControl is a controllable map for AI agents.**
 
