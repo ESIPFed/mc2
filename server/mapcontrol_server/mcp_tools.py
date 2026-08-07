@@ -188,20 +188,6 @@ def _internal_base_url() -> str:
     return f"http://127.0.0.1:{load_config().server.port}"
 
 
-def _internal_base_url() -> str:
-    """Loopback URL used for server self-navigation (headless screenshots).
-
-    Chromium runs on the same host/container as the server, so it must reach the
-    service over loopback on the *bound* port. _public_base_url() can be an
-    external address or reverse-proxy origin (via MAPCONTROL_PUBLIC_URL) that
-    does not resolve back to this process from inside the container — e.g.
-    "localhost:8080" inside the container points at the container itself, where
-    the app may be listening on a different port. Public URLs stay in
-    _public_base_url() for links handed back to external clients.
-    """
-    return f"http://127.0.0.1:{load_config().server.port}"
-
-
 # ─── map:// URI helpers (single source for the resource scheme) ──────────────
 # Canonical URIs for the Resources layer (mcp_resources.py imports these; they
 # live here so mcp_resources -> mcp_tools stays a one-way import).
