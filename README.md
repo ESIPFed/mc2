@@ -61,7 +61,7 @@ Ask an agent: *"Show the burn scar near Los Alamos, switch to satellite imagery,
 | [`server/`](server/) | FastAPI server — REST API, WebSocket hub, MCP server, GeoTIFF & screenshot services, auth portal |
 | [`sdk/`](sdk/) | `mapcontrol` — typed Python client SDK |
 | [`examples/`](examples/) | Runnable demo scripts (shapes, terrain, glyphs, GeoTIFFs) + sample data |
-| [`docs/`](docs/) | Guides — MCP integration, LLM context block, MCP Apps field guide, map-engine comparison, Puppeteer animation skills |
+| [`docs/`](docs/) | Guides — deployment, running from source (no Docker), MCP integration, LLM context block, MCP Apps field guide, map-engine comparison, Puppeteer animation skills |
 | [`deploy/`](deploy/) | Deployment helpers (local PyPI index for the SDK) |
 
 ## Quick start
@@ -90,6 +90,8 @@ curl http://localhost:8000/docs   # interactive API docs
 ```
 
 That's the whole install. Want maps that survive restarts, share links that work off your machine, or premium basemaps? See **[docs/deployment.md](docs/deployment.md)** — it walks from this minimal setup to a full production config and explains what every knob does. (Contributors: `git clone` this repo and `docker compose up --build` builds the image locally.)
+
+**No Docker?** Run it straight from Python — see **[docs/local-development.md](docs/local-development.md)** for the full from-source setup (venv, `pip install -e ./server`, headless-screenshot browser, and running on any port).
 
 ### 2. Drive a map from Python
 
