@@ -1,6 +1,6 @@
 # MapControl <sup>(MC²)</sup>
 
-**Map Control × Model Context Protocol** — a live, shareable web map that AI agents (and humans) drive from code.
+**Map Control × Model Context Protocol** — a live, shareable web map that AI agents and humans drive from code or conversation.
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Q4BB4uF68B)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -10,13 +10,21 @@
 [![MapLibre](https://img.shields.io/badge/MapLibre-GL-396CB2?logo=maplibre&logoColor=white)](https://maplibre.org/)
 [![ESIP](https://img.shields.io/badge/ESIP-Federation-1B6CA8)](https://www.esipfed.org/)
 
----
-![Demo: Flyover to  Matterhorn](docs/output2.gif)
----
+<!-- VIDEO-BANNER: replace this line with the bare github user-attachments URL for the demo video (drag the mp4 into the PR description to get one) -->
 
-Ask your AI assistant to *"draw the burn scar over Los Alamos and fly the camera to it"* — and watch it happen live in a browser tab. MapControl is a headless map server with a real-time MapLibre frontend: create maps, add GeoJSON and GeoTIFF overlays, animate the camera, switch basemaps and themes, take screenshots — over a **Python SDK**, a **REST API**, or the **Model Context Protocol** for Claude, Cline, and any other MCP client.
+**MapControl is a controllable map for AI agents.**
 
-Think of it as the Star Trek computer's map console. You say the words; the map moves.
+Agents can create maps, add and style geospatial data, move the camera, switch basemaps, render 3D terrain, capture screenshots, and update the map incrementally as they work. Humans open the same map in a browser, watch those changes happen live, interact with the result, and share it with a link.
+
+Control it through:
+
+- **MCP** — give an AI agent direct map tools (Claude, Cline, any MCP client)
+- **Python** — drive the map from scripts, notebooks, or generated code
+- **REST** — integrate MapControl into any application
+
+All three interfaces operate on the same live map sessions.
+
+Ask an agent: *"Show the burn scar near Los Alamos, switch to satellite imagery, and zoom to it."* — MapControl gives the agent a map it can actually operate, not just coordinates to describe or a static image to return.
 
 ## Why MapControl?
 
