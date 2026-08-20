@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ─── Style ───────────────────────────────────────────────────────────────────
@@ -38,7 +38,74 @@ class AssetStyle(BaseModel):
     #  "min_opacity": 0.15, "max_opacity": 0.85, "stroke": True}.
     # The asset slowly fades between translucent and opaque — a client-side
     # rAF loop; False/None = static. Works on fills, lines, and circles.
+    # NOTE: glow is now sugar over the generic `animate` list (an opacity
+    # effect); both are kept so existing callers keep working.
     glow: bool | dict[str, Any] | None = None
+    # ─── Static opacity (0..1) ───
+    # Flat opacity applied to fills, lines, and circles. None = renderer
+    # defaults. Composes with hover highlight; ignored while an opacity
+    # animation is running (the animation wins).
+    opacity: float | None = None
+    # ─── Animate (generic property animation) ───
+    # A list of effects driven by one shared client-side rAF loop:
+    #   [{"property": "opacity"|"circle_radius"|"stroke_width",
+    #     "from": 0.3, "to": 1.0, "period": 1.2, "easing": "sine"}]
+    # Each effect oscillates the paint property between `from` and `to`
+    # over `period` seconds. Empty list / None = no animation. `glow: true`
+    # compiles to a single opacity effect for back-compat.
+    #
+    # Special effect: "ripple" — a sonar-ping halo ring that expands
+    # outward from point markers while fading to transparent (sawtooth,
+    # not sine): radius ramps `from` → `to` px per cycle as opacity ramps
+    # to 0, then restarts. Optional "color" (hex) tints the halo
+    # (defaults to the marker's fill color):
+    #   [{"property": "ripple", "from": 8, "to": 26, "period": 1.6,
+    #     "color": "#38bdf8"}]
+    # Rendered as an auxiliary circle layer beneath the marker; removed
+    # automatically when the animation stops. Points only.
+    animate: list[dict[str, Any]] | None = None
+    # ─── Status (attention-lifecycle sugar) ───
+    # "active" → attention pulse (opacity + marker-size + ripple halo)
+    # "done"   → animation stops, full opacity, success stroke
+    # "muted"  → animation stops, grayed out (no longer under consideration)
+    # Expands server-side into concrete animate/opacity/color fields (only
+    # filling fields the caller left unset), so clients and session restore
+    # only ever see concrete style values.
+    status: str | None = None
+
+    @model_validator(mode="after")
+    def _expand_status(self) -> "AssetStyle":
+        """Expand the ``status`` preset into concrete style fields.
+
+        Explicitly-set fields always win; the preset only fills gaps. The
+        status value itself is preserved so callers can read it back.
+        """
+        if self.status == "active":
+            if self.animate is None:
+                self.animate = [
+                    {"property": "opacity", "from": 0.35, "to": 1.0, "period": 1.2},
+                    {"property": "circle_radius", "from": 6, "to": 10, "period": 1.2},
+                    {"property": "ripple", "from": 8, "to": 26, "period": 1.6},
+                ]
+        elif self.status == "done":
+            if self.animate is None:
+                self.animate = []  # stop any running animation
+            if self.opacity is None:
+                self.opacity = 1.0
+            if self.stroke_color is None:
+                self.stroke_color = "#22c55e"
+            if self.stroke_width is None:
+                self.stroke_width = 3
+        elif self.status == "muted":
+            if self.animate is None:
+                self.animate = []  # stop any running animation
+            if self.opacity is None:
+                self.opacity = 0.35
+            if self.fill_color is None:
+                self.fill_color = "#9ca3af"
+            if self.stroke_color is None:
+                self.stroke_color = "#6b7280"
+        return self
 
 
 

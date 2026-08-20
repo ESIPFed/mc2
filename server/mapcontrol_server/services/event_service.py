@@ -255,9 +255,18 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         style_data = event.data.get("style", {})
         if target_id:
             from ..models import AssetUpdate
+            style = AssetStyle(**style_data)
             await asset_service.update_asset(
-                map_id, target_id, AssetUpdate(style=AssetStyle(**style_data))
+                map_id, target_id, AssetUpdate(style=style)
             )
+            # Broadcast the EXPANDED style so clients receive concrete
+            # animate/opacity/color fields — style.status is server-side
+            # sugar (see AssetStyle._expand_status); the frontend only
+            # understands the concrete fields. exclude_unset keeps the
+            # partial-update semantics (only caller-touched + preset-filled
+            # fields travel), so e.g. an opacity-only update can't clobber
+            # colors.
+            event.data["style"] = style.model_dump(exclude_none=True)
 
     elif event.type == "set_theme":
         # Map-level UI theme (light | dark | auto). Persist so new viewers /

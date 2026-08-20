@@ -802,6 +802,17 @@ async def set_visibility(map_id: str, asset_id: str, visible: bool = True) -> di
 async def update_style(map_id: str, asset_id: str, style: AssetStyle) -> dict[str, Any]:
     """Change an asset's style (fill_color, stroke_color, stroke_width, line_dash).
 
+    Attention lifecycle: style.status is one-word sugar for demo/progress
+    states — "active" makes the asset pulse (opacity + marker-size
+    animation plus a ripple halo — a sonar-ping ring expanding outward
+    while dissipating) to draw attention while it's being processed;
+    "done" stops the pulse and marks it complete (full opacity, green
+    stroke); "muted" grays it out (no longer under consideration). For
+    custom effects use style.animate = [{"property": "opacity"|
+    "circle_radius"|"stroke_width"|"ripple", "from": .., "to": ..,
+    "period": seconds, "color": optional hex for ripple}] ([] stops
+    animation), and style.opacity for a flat 0..1 opacity.
+
     Also controls labels: style.label=True renders the asset name as map text
     (a string gives custom text; False removes the label); label_placement is
     'point' | 'center' | 'perimeter' (text along the polygon outline / line);
