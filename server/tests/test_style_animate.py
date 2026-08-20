@@ -43,9 +43,23 @@ async def map_with_point(client):
 
 def test_status_active_expands_to_pulse():
     s = AssetStyle(status="active")
-    assert s.animate is not None and len(s.animate) == 2
+    assert s.animate is not None and len(s.animate) == 3
     props = {e["property"] for e in s.animate}
-    assert props == {"opacity", "circle_radius"}
+    assert props == {"opacity", "circle_radius", "ripple"}
+
+
+def test_status_active_ripple_expands_outward():
+    s = AssetStyle(status="active")
+    ripple = next(e for e in s.animate if e["property"] == "ripple")
+    assert ripple["to"] > ripple["from"]  # halo grows outward
+    assert ripple["period"] > 0
+
+
+def test_custom_ripple_with_color_round_trips():
+    fx = [{"property": "ripple", "from": 8, "to": 30, "period": 2.0,
+           "color": "#38bdf8"}]
+    s = AssetStyle(animate=fx)
+    assert s.model_dump(exclude_none=True)["animate"] == fx
 
 
 def test_status_done_stops_animation_and_marks_complete():
@@ -100,7 +114,7 @@ async def test_add_point_with_status_stores_expanded_style(client):
     asset = (await client.get(f"/api/maps/{map_id}/assets/{asset_id}")).json()
     style = asset["style"]
     assert style["status"] == "active"
-    assert style["animate"] and len(style["animate"]) == 2
+    assert style["animate"] and len(style["animate"]) == 3
 
 
 async def test_update_style_status_lifecycle(client, map_with_point):

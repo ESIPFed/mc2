@@ -39,9 +39,14 @@ class Style:
               "from": 0.35, "to": 1.0, "period": 1.2}]
             Each effect oscillates the paint property between `from` and
             `to` over `period` seconds. [] stops any running animation.
+            Special effect "ripple": a sonar-ping halo ring that expands
+            outward from point markers (radius `from`→`to` px) while
+            fading to transparent, then restarts (sawtooth). Optional
+            "color" (hex) tints the halo:
+            [{"property": "ripple", "from": 8, "to": 26, "period": 1.6}]
 
     Status (attention-lifecycle sugar):
-        status: "active" (attention pulse: opacity + marker-size),
+        status: "active" (attention pulse: opacity + marker-size + ripple halo),
             "done" (stop animation, full opacity, success stroke), or
             "muted" (stop animation, grayed out). Expanded server-side
             into concrete animate/opacity/color fields; explicit fields

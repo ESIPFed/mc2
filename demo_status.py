@@ -66,6 +66,16 @@ def main():
     for name in ("C1", "C2", "C3"):
         event("update_style", {"asset_id": ids[name], "style": {"status": "muted"}})
 
+    # Finale: raw ripple spec — a big slow sonar ping with a custom color
+    time.sleep(3)
+    print("Finale: raw ripple on P2 (halo 8->40px, 2.2s period, amber)...")
+    event("update_style", {"asset_id": ids["P2"], "style": {
+        "animate": [{"property": "ripple", "from": 8, "to": 40,
+                     "period": 2.2, "color": "#f59e0b"}],
+    }})
+    time.sleep(10)
+    event("update_style", {"asset_id": ids["P2"], "style": {"status": "done"}})
+
     print("Demo complete: P1-P3 solid green, C1-C3 grayed out.")
 
 

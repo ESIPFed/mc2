@@ -1127,7 +1127,10 @@ async def serve_map(map_id: str, request: Request):
         //   [{{"property": "opacity", "from": 0.35, "to": 1.0, "period": 1.2}},
         //    {{"property": "circle_radius", "from": 6, "to": 10, "period": 1.2}}]
         // Supported properties: opacity (fill/line/circle, composes with the
-        // feature-state hover expression), circle_radius, stroke_width.
+        // feature-state hover expression), circle_radius, stroke_width, and
+        // ripple (a sonar-ping halo on point markers: an auxiliary ring
+        // beneath the marker expands `from`→`to` px while fading to
+        // transparent — sawtooth, not sine — then restarts).
         // style.glow (bool | {{period, min_opacity, max_opacity, stroke}}) is
         // kept as back-compat sugar and compiles to a single opacity effect.
         // The loop self-starts when the first animated asset registers and
@@ -1148,6 +1151,7 @@ async def serve_map(map_id: str, request: Request):
                         to: Number(e.to !== undefined ? e.to : 1.0),
                         period: Math.max(0.2, Number(e.period) || 2.0),
                         stroke: e.stroke !== false,
+                        color: (typeof e.color === 'string') ? e.color : null,
                     }});
                 }}
             }} else if (s.glow) {{
@@ -1220,6 +1224,17 @@ async def serve_map(map_id: str, request: Request):
                             if (a.layerIds.circle && map.getLayer(a.layerIds.circle)) {{
                                 map.setPaintProperty(a.layerIds.circle, 'circle-stroke-width', v);
                             }}
+                        }} else if (fx.property === 'ripple') {{
+                            // Sonar ping: sawtooth phase — the halo ring
+                            // grows outward while fading to transparent,
+                            // then snaps back and repeats (dissipating wave).
+                            if (a.layerIds.halo && map.getLayer(a.layerIds.halo)) {{
+                                const saw = ((t / fx.period) % 1 + 1) % 1;
+                                const r = fx.from + (fx.to - fx.from) * saw;
+                                const o = 0.55 * (1 - saw);
+                                map.setPaintProperty(a.layerIds.halo, 'circle-radius', r);
+                                map.setPaintProperty(a.layerIds.halo, 'circle-stroke-opacity', o);
+                            }}
                         }}
                     }} catch (e) {{ /* layer mid-removal; next tick recovers */ }}
                 }}
@@ -1228,15 +1243,60 @@ async def serve_map(map_id: str, request: Request):
             animRafId = requestAnimationFrame(animTick);
         }}
 
+        function ensureHaloLayer(assetId, rippleFx) {{
+            // Auxiliary expanding-ring layer for the ripple effect. Reuses
+            // the asset's GeoJSON source; inserted beneath the marker circle
+            // so the ping radiates from behind it. Returns the halo layer id
+            // or null (no source on this asset).
+            const haloId = 'halo-' + assetId;
+            if (map.getLayer(haloId)) return haloId;
+            const srcId = 'src-' + assetId;
+            if (!map.getSource(srcId)) return null;
+            const circleId = 'circle-' + assetId;
+            let color = rippleFx.color;
+            if (!color) {{
+                try {{
+                    const p = map.getPaintProperty(circleId, 'circle-color');
+                    if (typeof p === 'string') color = p;
+                }} catch (e) {{}}
+            }}
+            const spec = {{
+                id: haloId, type: 'circle', source: srcId,
+                filter: ['==', '$type', 'Point'],
+                paint: {{
+                    'circle-color': 'rgba(0,0,0,0)',
+                    'circle-radius': rippleFx.from,
+                    'circle-opacity': 0,
+                    'circle-stroke-color': color || '#38bdf8',
+                    'circle-stroke-width': 2,
+                    'circle-stroke-opacity': 0,
+                }},
+            }};
+            try {{
+                if (map.getLayer(circleId)) map.addLayer(spec, circleId);
+                else map.addLayer(spec);
+            }} catch (e) {{ return null; }}
+            return haloId;
+        }}
+
+        function removeHaloLayer(assetId) {{
+            const haloId = 'halo-' + assetId;
+            try {{ if (map.getLayer(haloId)) map.removeLayer(haloId); }} catch (e) {{}}
+        }}
+
         function registerAnim(assetId, style) {{
             const effects = normalizeEffects(style || {{}});
             if (effects.length === 0) return;
+            const rippleFx = effects.find(fx => fx.property === 'ripple');
+            const haloId = rippleFx ? ensureHaloLayer(assetId, rippleFx) : null;
+            if (!rippleFx) removeHaloLayer(assetId);
             animAssets[assetId] = {{
                 effects: effects,
                 layerIds: {{
                     fill: 'fill-' + assetId,
                     line: 'line-' + assetId,
                     circle: 'circle-' + assetId,
+                    halo: haloId,
                 }},
                 staticOpacity: (style && style.opacity !== undefined) ? style.opacity : null,
             }};
@@ -1255,6 +1315,7 @@ async def serve_map(map_id: str, request: Request):
                     map.setPaintProperty(a.layerIds.circle, 'circle-radius', 6);
                 }}
             }} catch (e) {{}}
+            removeHaloLayer(assetId);
         }}
 
         // Back-compat aliases (call sites + older embeds)

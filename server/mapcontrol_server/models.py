@@ -53,9 +53,19 @@ class AssetStyle(BaseModel):
     # Each effect oscillates the paint property between `from` and `to`
     # over `period` seconds. Empty list / None = no animation. `glow: true`
     # compiles to a single opacity effect for back-compat.
+    #
+    # Special effect: "ripple" — a sonar-ping halo ring that expands
+    # outward from point markers while fading to transparent (sawtooth,
+    # not sine): radius ramps `from` → `to` px per cycle as opacity ramps
+    # to 0, then restarts. Optional "color" (hex) tints the halo
+    # (defaults to the marker's fill color):
+    #   [{"property": "ripple", "from": 8, "to": 26, "period": 1.6,
+    #     "color": "#38bdf8"}]
+    # Rendered as an auxiliary circle layer beneath the marker; removed
+    # automatically when the animation stops. Points only.
     animate: list[dict[str, Any]] | None = None
     # ─── Status (attention-lifecycle sugar) ───
-    # "active" → attention pulse (opacity + marker-size animation)
+    # "active" → attention pulse (opacity + marker-size + ripple halo)
     # "done"   → animation stops, full opacity, success stroke
     # "muted"  → animation stops, grayed out (no longer under consideration)
     # Expands server-side into concrete animate/opacity/color fields (only
@@ -75,6 +85,7 @@ class AssetStyle(BaseModel):
                 self.animate = [
                     {"property": "opacity", "from": 0.35, "to": 1.0, "period": 1.2},
                     {"property": "circle_radius", "from": 6, "to": 10, "period": 1.2},
+                    {"property": "ripple", "from": 8, "to": 26, "period": 1.6},
                 ]
         elif self.status == "done":
             if self.animate is None:
