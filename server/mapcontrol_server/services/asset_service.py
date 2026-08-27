@@ -32,9 +32,17 @@ async def create_asset(
     style_json = style.model_dump_json() if style else None
     metadata_json = metadata.model_dump_json() if metadata else None
 
+    # New assets stack on top: z_index = current max + 1 for this map.
+    cursor = await db.execute(
+        "SELECT COALESCE(MAX(z_index), -1) + 1 FROM assets WHERE map_id = ?",
+        (map_id,),
+    )
+    row = await cursor.fetchone()
+    z_index = row[0] if row else 0
+
     await db.execute(
-        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, source_url, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)""",
+        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)""",
         (
             asset_id,
             map_id,
@@ -44,6 +52,7 @@ async def create_asset(
             style_json,
             metadata_json,
             int(animated),
+            z_index,
             source_url,
             now,
             now,
@@ -61,6 +70,7 @@ async def create_asset(
         metadata=metadata,
         visible=True,
         animated=animated,
+        z_index=z_index,
         source_url=source_url,
         created_at=now,
         updated_at=now,
@@ -95,10 +105,15 @@ async def create_asset_from_url(
 
 
 async def list_assets(map_id: str) -> list[AssetResponse]:
-    """List all assets for a map."""
+    """List all assets for a map, bottom-most first (ascending z_index).
+
+    Iterating the result and adding layers in order reproduces the stacking:
+    later rows render on top (MapLibre adds new layers above existing ones).
+    """
     db = await get_db()
     cursor = await db.execute(
-        "SELECT * FROM assets WHERE map_id = ? ORDER BY created_at ASC", (map_id,)
+        "SELECT * FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
+        (map_id,),
     )
     rows = await cursor.fetchall()
 
@@ -121,6 +136,7 @@ async def list_assets(map_id: str) -> list[AssetResponse]:
                 metadata=metadata,
                 visible=bool(row["visible"]),
                 animated=bool(row["animated"]),
+                z_index=row["z_index"] or 0,
                 source_url=row["source_url"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
@@ -155,10 +171,29 @@ async def get_asset(map_id: str, asset_id: str) -> AssetResponse | None:
         metadata=metadata,
         visible=bool(row["visible"]),
         animated=bool(row["animated"]),
+        z_index=row["z_index"] or 0,
         source_url=row["source_url"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+async def reorder_assets(map_id: str, asset_ids: list[str]) -> None:
+    """Persist a new stacking order.
+
+    ``asset_ids`` is ordered TOP-most first (matching a layer-manager list).
+    The first id gets the highest z_index. Assets not mentioned keep their
+    existing z_index (they end up below the reordered set).
+    """
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    n = len(asset_ids)
+    for i, aid in enumerate(asset_ids):
+        await db.execute(
+            "UPDATE assets SET z_index = ?, updated_at = ? WHERE id = ? AND map_id = ?",
+            (n - i, now, aid, map_id),
+        )
+    await db.commit()
 
 
 async def update_asset(

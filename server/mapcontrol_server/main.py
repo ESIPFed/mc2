@@ -1930,6 +1930,26 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 console.log('Moved layer:', data.asset_id, position);
             }},
+
+            // ─── Full re-stack (drag-to-reorder in layer managers) ───
+            // data.asset_ids: complete stacking order, TOP-most first.
+            // Walk bottom→top moving each asset's layers to the top of the
+            // style, so the last-moved (list-top) asset renders on top.
+            // Relative order of non-listed layers (basemap etc.) is kept
+            // because we only move user asset layers.
+            reorder_assets(data) {{
+                const ids = (data.asset_ids || []).slice().reverse();  // bottom-most first
+                for (const id of ids) {{
+                    const reg = assetRegistry[id];
+                    if (!reg) continue;
+                    for (const lid of reg.layerIds) {{
+                        if (map.getLayer(lid)) {{
+                            try {{ map.moveLayer(lid); }} catch (e) {{}}
+                        }}
+                    }}
+                }}
+                console.log('Reordered assets (top first):', data.asset_ids);
+            }},
         }};
 
         // ─── Save/restore around map.setStyle() (vector basemap support) ───

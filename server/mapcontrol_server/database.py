@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS assets (
     metadata TEXT,
     visible INTEGER DEFAULT 1,
     animated INTEGER DEFAULT 0,
+    z_index INTEGER DEFAULT 0,
     source_url TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -92,6 +93,15 @@ async def init_db(config: AppConfig) -> aiosqlite.Connection:
     # mode; "anonymous" when auth is off) that created the map via MCP.
     try:
         await _db.execute("ALTER TABLE maps ADD COLUMN owner TEXT")
+    except aiosqlite.OperationalError:
+        pass  # column already present
+    # assets.z_index: stacking order (higher = rendered on top). New column for
+    # drag-to-reorder in layer managers; pre-existing rows default to 0 and
+    # keep their created_at tiebreak ordering.
+    try:
+        await _db.execute(
+            "ALTER TABLE assets ADD COLUMN z_index INTEGER DEFAULT 0"
+        )
     except aiosqlite.OperationalError:
         pass  # column already present
     await _db.commit()
