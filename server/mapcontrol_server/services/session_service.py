@@ -408,7 +408,8 @@ async def get_session_snapshot(map_id: str, user_session_id: str) -> SessionSnap
 
     # Get all assets for this map
     cursor = await db.execute(
-        "SELECT * FROM assets WHERE map_id = ? ORDER BY created_at ASC", (map_id,)
+        "SELECT * FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
+        (map_id,),
     )
     rows = await cursor.fetchall()
 

@@ -241,6 +241,22 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         if target_id:
             await asset_service.delete_asset(map_id, target_id)
 
+    elif event.type == "reorder_assets":
+        # data.asset_ids: full stacking order, TOP-most first (matches a
+        # layer-manager list where the top row renders on top). Persist the
+        # z_index values, then broadcast so live viewers re-stack via
+        # map.moveLayer.
+        ids = event.data.get("asset_ids") or []
+        if not isinstance(ids, list) or not ids:
+            return MapEventResponse(
+                event_id=event_id,
+                type=event.type,
+                asset_id=None,
+                created_at=now,
+                error="reorder_assets requires a non-empty 'asset_ids' list (topmost first)",
+            )
+        await asset_service.reorder_assets(map_id, ids)
+
     elif event.type == "set_visibility":
         target_id = event.data.get("asset_id")
         visible = event.data.get("visible", True)

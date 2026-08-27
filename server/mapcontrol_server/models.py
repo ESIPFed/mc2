@@ -180,6 +180,7 @@ class AssetResponse(BaseModel):
     metadata: AssetMetadata | None = None
     visible: bool = True
     animated: bool = False
+    z_index: int = 0
     source_url: str | None = None
     created_at: str
     updated_at: str
