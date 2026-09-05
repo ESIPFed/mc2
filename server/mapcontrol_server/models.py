@@ -41,11 +41,13 @@ class AssetStyle(BaseModel):
     glow: bool | dict[str, Any] | None = None
     # ─── Mask (spotlight / focus effect) ───
     # True → defaults; or {"color": "#000000", "opacity": 0.55}.
-    # Darkens everything OUTSIDE the polygon(s): a world-sized fill with the
-    # asset's outer rings punched out as holes is inserted just below the
-    # asset, so the interior shows the bare map while the exterior is dimmed.
-    # When mask is set and no fill_color is given, the polygon's own fill is
-    # transparent. Polygon/MultiPolygon only; False/None = no mask.
+    # Darkens everything OUTSIDE the polygon(s): one shared world-sized fill
+    # with the outer rings of every visible masked asset punched out as holes
+    # sits just below the assets, so interiors show the bare map while the
+    # exterior is dimmed once (several masked assets don't compound; the most
+    # recently set color/opacity wins). When mask is set and no fill_color is
+    # given, the polygon's own fill is transparent. Polygon/MultiPolygon only;
+    # False/None = no mask.
     mask: bool | dict[str, Any] | None = None
 
 

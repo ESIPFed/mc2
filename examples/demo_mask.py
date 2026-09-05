@@ -174,7 +174,7 @@ wait()
 send("set_basemap", {"basemap": "satellite"})
 send("set_visibility", {"asset_id": balaton_id, "visible": True})
 send("zoom_to_assets", {"asset_ids": [balaton_id, islands_id]})
-print("   both masked assets visible (masks compound where they overlap)")
+print("   both masked assets visible → one shared mask, both interiors clear")
 
 print(f"\n✅ Done. Keep playing with the map: {map_url}")
 

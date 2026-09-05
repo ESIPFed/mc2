@@ -30,8 +30,10 @@ class Style:
     Mask (spotlight / focus effect):
         mask: True → defaults, or {"color": "#000000", "opacity": 0.55} —
             everything OUTSIDE the polygon is darkened while the interior
-            shows the bare map. If no fill_color is given the polygon's own
-            fill is transparent. Polygon/MultiPolygon assets only.
+            shows the bare map. Several masked assets share one mask (all
+            interiors clear, exterior dimmed once; latest color/opacity
+            wins). If no fill_color is given the polygon's own fill is
+            transparent. Polygon/MultiPolygon assets only.
     """
     fill_color: str | None = None
     stroke_color: str | None = None
