@@ -26,6 +26,7 @@ class Style:
         glow: True → defaults, or {"period": 2.0 (seconds per cycle),
             "min_opacity": 0.15, "max_opacity": 0.85, "stroke": True} —
             the asset slowly fades between translucent and opaque.
+            (Back-compat sugar over `animate`.)
 
     Mask (spotlight / focus effect):
         mask: True → defaults, or {"color": "#000000", "opacity": 0.55} —
@@ -34,6 +35,30 @@ class Style:
             interiors clear, exterior dimmed once; latest color/opacity
             wins). If no fill_color is given the polygon's own fill is
             transparent. Polygon/MultiPolygon assets only.
+
+    Static opacity:
+        opacity: flat 0..1 opacity on fills, lines, and circles.
+            None = renderer defaults. An active animation overrides it
+            while running.
+
+    Animate (generic property animation):
+        animate: list of effects driven by one shared client rAF loop:
+            [{"property": "opacity"|"circle_radius"|"stroke_width",
+              "from": 0.35, "to": 1.0, "period": 1.2}]
+            Each effect oscillates the paint property between `from` and
+            `to` over `period` seconds. [] stops any running animation.
+            Special effect "ripple": a sonar-ping halo ring that expands
+            outward from point markers (radius `from`→`to` px) while
+            fading to transparent, then restarts (sawtooth). Optional
+            "color" (hex) tints the halo:
+            [{"property": "ripple", "from": 8, "to": 26, "period": 1.6}]
+
+    Status (attention-lifecycle sugar):
+        status: "active" (attention pulse: opacity + marker-size + ripple halo),
+            "done" (stop animation, full opacity, success stroke), or
+            "muted" (stop animation, grayed out). Expanded server-side
+            into concrete animate/opacity/color fields; explicit fields
+            you set alongside it always win.
     """
     fill_color: str | None = None
     stroke_color: str | None = None
@@ -46,6 +71,9 @@ class Style:
     color_by: dict[str, Any] | None = None
     glow: bool | dict[str, Any] | None = None
     mask: bool | dict[str, Any] | None = None
+    opacity: float | None = None
+    animate: list[dict[str, Any]] | None = None
+    status: str | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in {
@@ -60,6 +88,9 @@ class Style:
             "color_by": self.color_by,
             "glow": self.glow,
             "mask": self.mask,
+            "opacity": self.opacity,
+            "animate": self.animate,
+            "status": self.status,
         }.items() if v is not None}
 
 

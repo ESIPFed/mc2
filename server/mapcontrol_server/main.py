@@ -1120,81 +1120,71 @@ async def serve_map(map_id: str, request: Request):
             return labelId;
         }}
 
-        // ─── Glow engine (pulsing opacity animation, style.glow) ─────────
-        // One shared requestAnimationFrame loop drives every glowing asset:
-        // opacity = min + (max-min) * (0.5 + 0.5*sin(2π·t/period)). The loop
-        // self-starts when the first glowing asset registers and self-stops
-        // when the last one is removed (no idle CPU burn). Fill opacity
-        // composes with the feature-state hover expression so hover still
-        // brightens a glowing polygon.
-        const glowAssets = {{}};  // asset_id -> {{period, min, max, stroke, layerIds: {{fill, line, circle}}}}
-        let glowRafId = null;
+        // ─── Animation engine (style.animate / style.glow) ───────────────
+        // One shared requestAnimationFrame loop drives every animated asset.
+        // style.animate is a list of effects, each oscillating one numeric
+        // paint property between `from` and `to` over `period` seconds:
+        //   [{{"property": "opacity", "from": 0.35, "to": 1.0, "period": 1.2}},
+        //    {{"property": "circle_radius", "from": 6, "to": 10, "period": 1.2}}]
+        // Supported properties: opacity (fill/line/circle, composes with the
+        // feature-state hover expression), circle_radius, stroke_width, and
+        // ripple (a sonar-ping halo on point markers: an auxiliary ring
+        // beneath the marker expands `from`→`to` px while fading to
+        // transparent — sawtooth, not sine — then restarts).
+        // style.glow (bool | {{period, min_opacity, max_opacity, stroke}}) is
+        // kept as back-compat sugar and compiles to a single opacity effect.
+        // The loop self-starts when the first animated asset registers and
+        // self-stops when the last one is removed (no idle CPU burn).
+        const animAssets = {{}};  // asset_id -> {{effects: [...], layerIds: {{fill, line, circle}}, staticOpacity}}
+        let animRafId = null;
 
-        function parseGlow(g) {{
-            if (!g) return null;
-            const o = (typeof g === 'object') ? g : {{}};
-            return {{
-                period: Math.max(0.2, Number(o.period) || 2.0),
-                min: Math.min(1, Math.max(0, o.min_opacity !== undefined ? Number(o.min_opacity) : 0.15)),
-                max: Math.min(1, Math.max(0, o.max_opacity !== undefined ? Number(o.max_opacity) : 0.85)),
-                stroke: o.stroke !== false,
-            }};
-        }}
-
-        function glowTick(nowMs) {{
-            const ids = Object.keys(glowAssets);
-            if (ids.length === 0) {{ glowRafId = null; return; }}
-            const t = nowMs / 1000;
-            for (const aid of ids) {{
-                const g = glowAssets[aid];
-                const phase = 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / g.period);
-                const op = g.min + (g.max - g.min) * phase;
-                try {{
-                    if (g.layerIds.fill && map.getLayer(g.layerIds.fill)) {{
-                        // Compose with hover: hovered feature stays brighter
-                        map.setPaintProperty(g.layerIds.fill, 'fill-opacity', ['case',
-                            ['boolean', ['feature-state', 'hover'], false],
-                            Math.min(1, op + 0.2), op]);
-                    }}
-                    if (g.stroke && g.layerIds.line && map.getLayer(g.layerIds.line)) {{
-                        map.setPaintProperty(g.layerIds.line, 'line-opacity', op);
-                    }}
-                    if (g.layerIds.circle && map.getLayer(g.layerIds.circle)) {{
-                        map.setPaintProperty(g.layerIds.circle, 'circle-opacity', op);
-                        map.setPaintProperty(g.layerIds.circle, 'circle-stroke-opacity', op);
-                    }}
-                }} catch (e) {{ /* layer mid-removal; next tick recovers */ }}
-            }}
-            map.triggerRepaint();
-            glowRafId = requestAnimationFrame(glowTick);
-        }}
-
-        function registerGlow(assetId, glowCfg) {{
-            const g = parseGlow(glowCfg);
-            if (!g) return;
-            g.layerIds = {{
-                fill: 'fill-' + assetId,
-                line: 'line-' + assetId,
-                circle: 'circle-' + assetId,
-            }};
-            glowAssets[assetId] = g;
-            if (glowRafId === null) glowRafId = requestAnimationFrame(glowTick);
-        }}
-
-        function unregisterGlow(assetId) {{
-            if (!glowAssets[assetId]) return;
-            const g = glowAssets[assetId];
-            delete glowAssets[assetId];
-            // Restore static paint values
-            try {{
-                if (map.getLayer(g.layerIds.fill)) {{
-                    map.setPaintProperty(g.layerIds.fill, 'fill-opacity', ['case',
-                        ['boolean', ['feature-state', 'hover'], false], 0.72, 0.5]);
+        function normalizeEffects(s) {{
+            // Style → effects list. `animate` wins; `glow` compiles to an
+            // opacity effect. Returns [] when there is nothing to animate.
+            const out = [];
+            if (Array.isArray(s.animate)) {{
+                for (const e of s.animate) {{
+                    if (!e || !e.property) continue;
+                    out.push({{
+                        property: String(e.property),
+                        from: Number(e.from !== undefined ? e.from : 0.2),
+                        to: Number(e.to !== undefined ? e.to : 1.0),
+                        period: Math.max(0.2, Number(e.period) || 2.0),
+                        stroke: e.stroke !== false,
+                        color: (typeof e.color === 'string') ? e.color : null,
+                    }});
                 }}
-                if (map.getLayer(g.layerIds.line)) map.setPaintProperty(g.layerIds.line, 'line-opacity', 1);
-                if (map.getLayer(g.layerIds.circle)) {{
-                    map.setPaintProperty(g.layerIds.circle, 'circle-opacity', 1);
-                    map.setPaintProperty(g.layerIds.circle, 'circle-stroke-opacity', 1);
+            }} else if (s.glow) {{
+                const o = (typeof s.glow === 'object') ? s.glow : {{}};
+                out.push({{
+                    property: 'opacity',
+                    from: Math.min(1, Math.max(0, o.min_opacity !== undefined ? Number(o.min_opacity) : 0.15)),
+                    to: Math.min(1, Math.max(0, o.max_opacity !== undefined ? Number(o.max_opacity) : 0.85)),
+                    period: Math.max(0.2, Number(o.period) || 2.0),
+                    stroke: o.stroke !== false,
+                }});
+            }}
+            return out;
+        }}
+
+        function applyStaticOpacity(assetId, opacity) {{
+            // Flat opacity on all of an asset's paint layers (style.opacity).
+            // null/undefined restores renderer defaults. Fill keeps the
+            // hover-brighten expression, scaled by the requested opacity.
+            const op = (opacity === null || opacity === undefined) ? null
+                : Math.min(1, Math.max(0, Number(opacity)));
+            const fillId = 'fill-' + assetId, lineId = 'line-' + assetId, circleId = 'circle-' + assetId;
+            try {{
+                if (map.getLayer(fillId)) {{
+                    map.setPaintProperty(fillId, 'fill-opacity', op === null
+                        ? ['case', ['boolean', ['feature-state', 'hover'], false], 0.72, 0.5]
+                        : ['case', ['boolean', ['feature-state', 'hover'], false],
+                            Math.min(1, 0.72 * op + 0.2 * op), 0.5 * op]);
+                }}
+                if (map.getLayer(lineId)) map.setPaintProperty(lineId, 'line-opacity', op === null ? 1 : op);
+                if (map.getLayer(circleId)) {{
+                    map.setPaintProperty(circleId, 'circle-opacity', op === null ? 1 : op);
+                    map.setPaintProperty(circleId, 'circle-stroke-opacity', op === null ? 1 : op);
                 }}
             }} catch (e) {{}}
         }}
@@ -1311,6 +1301,139 @@ async def serve_map(map_id: str, request: Request):
             rebuildMask();
         }}
 
+        function animTick(nowMs) {{
+            const ids = Object.keys(animAssets);
+            if (ids.length === 0) {{ animRafId = null; return; }}
+            const t = nowMs / 1000;
+            for (const aid of ids) {{
+                const a = animAssets[aid];
+                for (const fx of a.effects) {{
+                    const phase = 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / fx.period);
+                    const v = fx.from + (fx.to - fx.from) * phase;
+                    try {{
+                        if (fx.property === 'opacity') {{
+                            if (a.layerIds.fill && map.getLayer(a.layerIds.fill)) {{
+                                // Compose with hover: hovered feature stays brighter
+                                map.setPaintProperty(a.layerIds.fill, 'fill-opacity', ['case',
+                                    ['boolean', ['feature-state', 'hover'], false],
+                                    Math.min(1, v + 0.2), v]);
+                            }}
+                            if (fx.stroke && a.layerIds.line && map.getLayer(a.layerIds.line)) {{
+                                map.setPaintProperty(a.layerIds.line, 'line-opacity', v);
+                            }}
+                            if (a.layerIds.circle && map.getLayer(a.layerIds.circle)) {{
+                                map.setPaintProperty(a.layerIds.circle, 'circle-opacity', v);
+                                map.setPaintProperty(a.layerIds.circle, 'circle-stroke-opacity', v);
+                            }}
+                        }} else if (fx.property === 'circle_radius') {{
+                            if (a.layerIds.circle && map.getLayer(a.layerIds.circle)) {{
+                                map.setPaintProperty(a.layerIds.circle, 'circle-radius', v);
+                            }}
+                        }} else if (fx.property === 'stroke_width') {{
+                            if (a.layerIds.line && map.getLayer(a.layerIds.line)) {{
+                                map.setPaintProperty(a.layerIds.line, 'line-width', v);
+                            }}
+                            if (a.layerIds.circle && map.getLayer(a.layerIds.circle)) {{
+                                map.setPaintProperty(a.layerIds.circle, 'circle-stroke-width', v);
+                            }}
+                        }} else if (fx.property === 'ripple') {{
+                            // Sonar ping: sawtooth phase — the halo ring
+                            // grows outward while fading to transparent,
+                            // then snaps back and repeats (dissipating wave).
+                            if (a.layerIds.halo && map.getLayer(a.layerIds.halo)) {{
+                                const saw = ((t / fx.period) % 1 + 1) % 1;
+                                const r = fx.from + (fx.to - fx.from) * saw;
+                                const o = 0.55 * (1 - saw);
+                                map.setPaintProperty(a.layerIds.halo, 'circle-radius', r);
+                                map.setPaintProperty(a.layerIds.halo, 'circle-stroke-opacity', o);
+                            }}
+                        }}
+                    }} catch (e) {{ /* layer mid-removal; next tick recovers */ }}
+                }}
+            }}
+            map.triggerRepaint();
+            animRafId = requestAnimationFrame(animTick);
+        }}
+
+        function ensureHaloLayer(assetId, rippleFx) {{
+            // Auxiliary expanding-ring layer for the ripple effect. Reuses
+            // the asset's GeoJSON source; inserted beneath the marker circle
+            // so the ping radiates from behind it. Returns the halo layer id
+            // or null (no source on this asset).
+            const haloId = 'halo-' + assetId;
+            if (map.getLayer(haloId)) return haloId;
+            const srcId = 'src-' + assetId;
+            if (!map.getSource(srcId)) return null;
+            const circleId = 'circle-' + assetId;
+            let color = rippleFx.color;
+            if (!color) {{
+                try {{
+                    const p = map.getPaintProperty(circleId, 'circle-color');
+                    if (typeof p === 'string') color = p;
+                }} catch (e) {{}}
+            }}
+            const spec = {{
+                id: haloId, type: 'circle', source: srcId,
+                filter: ['==', '$type', 'Point'],
+                paint: {{
+                    'circle-color': 'rgba(0,0,0,0)',
+                    'circle-radius': rippleFx.from,
+                    'circle-opacity': 0,
+                    'circle-stroke-color': color || '#38bdf8',
+                    'circle-stroke-width': 2,
+                    'circle-stroke-opacity': 0,
+                }},
+            }};
+            try {{
+                if (map.getLayer(circleId)) map.addLayer(spec, circleId);
+                else map.addLayer(spec);
+            }} catch (e) {{ return null; }}
+            return haloId;
+        }}
+
+        function removeHaloLayer(assetId) {{
+            const haloId = 'halo-' + assetId;
+            try {{ if (map.getLayer(haloId)) map.removeLayer(haloId); }} catch (e) {{}}
+        }}
+
+        function registerAnim(assetId, style) {{
+            const effects = normalizeEffects(style || {{}});
+            if (effects.length === 0) return;
+            const rippleFx = effects.find(fx => fx.property === 'ripple');
+            const haloId = rippleFx ? ensureHaloLayer(assetId, rippleFx) : null;
+            if (!rippleFx) removeHaloLayer(assetId);
+            animAssets[assetId] = {{
+                effects: effects,
+                layerIds: {{
+                    fill: 'fill-' + assetId,
+                    line: 'line-' + assetId,
+                    circle: 'circle-' + assetId,
+                    halo: haloId,
+                }},
+                staticOpacity: (style && style.opacity !== undefined) ? style.opacity : null,
+            }};
+            if (animRafId === null) animRafId = requestAnimationFrame(animTick);
+        }}
+
+        function unregisterAnim(assetId, staticOpacity) {{
+            if (!animAssets[assetId]) return;
+            const a = animAssets[assetId];
+            delete animAssets[assetId];
+            // Restore static paint values (honoring style.opacity if given)
+            const op = (staticOpacity !== undefined) ? staticOpacity : a.staticOpacity;
+            applyStaticOpacity(assetId, op);
+            try {{
+                if (map.getLayer(a.layerIds.circle)) {{
+                    map.setPaintProperty(a.layerIds.circle, 'circle-radius', 6);
+                }}
+            }} catch (e) {{}}
+            removeHaloLayer(assetId);
+        }}
+
+        // Back-compat aliases (call sites + older embeds)
+        function registerGlow(assetId, glowCfg) {{ registerAnim(assetId, {{ glow: glowCfg }}); }}
+        function unregisterGlow(assetId) {{ unregisterAnim(assetId); }}
+
         // ─── Hover highlight (feature-state) ───
         // Polygon fills brighten under the cursor. Uses generateId'd feature
         // ids on the GeoJSON source; the fill layer's fill-opacity is a
@@ -1411,10 +1534,13 @@ async def serve_map(map_id: str, request: Request):
             // geojson kept so update_style can rebuild the mask layer later.
             assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson }};
 
-            // Optional glow (style.glow): pulsing opacity animation
-            if (s.glow) registerGlow(assetId, s.glow);
             // Optional mask (style.mask): darken everything outside the polygon
             if (s.mask && geomTypes.has('fill')) setAssetMask(assetId, s.mask);
+            // Static opacity (style.opacity), then optional animation
+            // (style.animate / style.glow) — the animation overrides the
+            // static value while running.
+            if (s.opacity !== undefined && s.opacity !== null) applyStaticOpacity(assetId, s.opacity);
+            if ((Array.isArray(s.animate) && s.animate.length > 0) || s.glow) registerAnim(assetId, s);
         }}
 
         // ─── Add Image Overlay (GeoTIFF) ───
@@ -1693,10 +1819,20 @@ async def serve_map(map_id: str, request: Request):
                             if (newId) reg.layerIds.push(newId);
                         }}
                     }}
-                    // Glow start/stop/re-tune via update_style
-                    if (s.glow !== undefined) {{
-                        unregisterGlow(data.asset_id);
-                        if (s.glow) registerGlow(data.asset_id, s.glow);
+                    // Static opacity via update_style (applied first; a
+                    // running animation re-drives opacity on its next tick)
+                    if (s.opacity !== undefined) {{
+                        applyStaticOpacity(data.asset_id, s.opacity);
+                        if (animAssets[data.asset_id]) {{
+                            animAssets[data.asset_id].staticOpacity = s.opacity;
+                        }}
+                    }}
+                    // Animation start/stop/re-tune via update_style.
+                    // animate: []  → stop; animate: [...] → replace effects;
+                    // glow keeps working as the back-compat alias.
+                    if (s.animate !== undefined || s.glow !== undefined) {{
+                        unregisterAnim(data.asset_id, s.opacity);
+                        registerAnim(data.asset_id, s);
                     }}
                     // Mask add/remove/re-tune via update_style. The fill layer
                     // is left untouched unless mask is being turned ON with
@@ -1929,7 +2065,31 @@ async def serve_map(map_id: str, request: Request):
                         }}
                     }}
                 }}
+                // Keep the shared mask beneath the lowest masked asset.
+                if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
                 console.log('Moved layer:', data.asset_id, position);
+            }},
+
+            // ─── Full re-stack (drag-to-reorder in layer managers) ───
+            // data.asset_ids: complete stacking order, TOP-most first.
+            // Walk bottom→top moving each asset's layers to the top of the
+            // style, so the last-moved (list-top) asset renders on top.
+            // Relative order of non-listed layers (basemap etc.) is kept
+            // because we only move user asset layers.
+            reorder_assets(data) {{
+                const ids = (data.asset_ids || []).slice().reverse();  // bottom-most first
+                for (const id of ids) {{
+                    const reg = assetRegistry[id];
+                    if (!reg) continue;
+                    for (const lid of reg.layerIds) {{
+                        if (map.getLayer(lid)) {{
+                            try {{ map.moveLayer(lid); }} catch (e) {{}}
+                        }}
+                    }}
+                }}
+                // Keep the shared mask beneath the lowest masked asset.
+                if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+                console.log('Reordered assets (top first):', data.asset_ids);
             }},
         }};
 
