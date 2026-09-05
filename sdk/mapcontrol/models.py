@@ -28,6 +28,14 @@ class Style:
             the asset slowly fades between translucent and opaque.
             (Back-compat sugar over `animate`.)
 
+    Mask (spotlight / focus effect):
+        mask: True → defaults, or {"color": "#000000", "opacity": 0.55} —
+            everything OUTSIDE the polygon is darkened while the interior
+            shows the bare map. Several masked assets share one mask (all
+            interiors clear, exterior dimmed once; latest color/opacity
+            wins). If no fill_color is given the polygon's own fill is
+            transparent. Polygon/MultiPolygon assets only.
+
     Static opacity:
         opacity: flat 0..1 opacity on fills, lines, and circles.
             None = renderer defaults. An active animation overrides it
@@ -62,6 +70,7 @@ class Style:
     label_placement: str | None = None
     color_by: dict[str, Any] | None = None
     glow: bool | dict[str, Any] | None = None
+    mask: bool | dict[str, Any] | None = None
     opacity: float | None = None
     animate: list[dict[str, Any]] | None = None
     status: str | None = None
@@ -78,6 +87,7 @@ class Style:
             "label_placement": self.label_placement,
             "color_by": self.color_by,
             "glow": self.glow,
+            "mask": self.mask,
             "opacity": self.opacity,
             "animate": self.animate,
             "status": self.status,

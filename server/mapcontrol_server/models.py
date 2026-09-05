@@ -41,6 +41,16 @@ class AssetStyle(BaseModel):
     # NOTE: glow is now sugar over the generic `animate` list (an opacity
     # effect); both are kept so existing callers keep working.
     glow: bool | dict[str, Any] | None = None
+    # ─── Mask (spotlight / focus effect) ───
+    # True → defaults; or {"color": "#000000", "opacity": 0.55}.
+    # Darkens everything OUTSIDE the polygon(s): one shared world-sized fill
+    # with the outer rings of every visible masked asset punched out as holes
+    # sits just below the assets, so interiors show the bare map while the
+    # exterior is dimmed once (several masked assets don't compound; the most
+    # recently set color/opacity wins). When mask is set and no fill_color is
+    # given, the polygon's own fill is transparent. Polygon/MultiPolygon only;
+    # False/None = no mask.
+    mask: bool | dict[str, Any] | None = None
     # ─── Static opacity (0..1) ───
     # Flat opacity applied to fills, lines, and circles. None = renderer
     # defaults. Composes with hover highlight; ignored while an opacity
