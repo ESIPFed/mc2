@@ -1199,6 +1199,95 @@ async def serve_map(map_id: str, request: Request):
             }} catch (e) {{}}
         }}
 
+        // ─── Mask engine (spotlight / focus effect, style.mask) ──────────
+        // Darkens everything OUTSIDE a polygon asset. Implementation: one
+        // extra fill layer whose geometry is the whole world (outer ring)
+        // with the asset's polygon outer rings punched out as holes. The
+        // layer is inserted directly below the asset's own fill so the
+        // outline/label stay on top; it joins reg.layerIds so visibility
+        // toggles follow the asset for free.
+        //
+        // Limitations: polygons crossing the antimeridian mask incorrectly
+        // (world-ring approach); interior holes of the AOI stay undarkened;
+        // several masked assets compound (double-darken).
+        const MASK_WORLD_RING = [[-180, -90], [180, -90], [180, 90], [-180, 90], [-180, -90]];
+
+        function parseMask(m) {{
+            if (!m) return null;
+            const o = (typeof m === 'object') ? m : {{}};
+            const op = o.opacity !== undefined ? Number(o.opacity) : 0.55;
+            return {{
+                color: (typeof o.color === 'string' && o.color) ? o.color : '#000000',
+                opacity: Math.min(1, Math.max(0, isNaN(op) ? 0.55 : op)),
+            }};
+        }}
+
+        // World polygon minus every outer ring of every Polygon/MultiPolygon.
+        function buildMaskGeoJSON(geojson) {{
+            const holes = [];
+            function walk(geom) {{
+                if (!geom) return;
+                if (geom.type === 'Polygon') {{
+                    if (geom.coordinates && geom.coordinates[0]) holes.push(geom.coordinates[0]);
+                }} else if (geom.type === 'MultiPolygon') {{
+                    for (const poly of geom.coordinates || []) if (poly && poly[0]) holes.push(poly[0]);
+                }} else if (geom.type === 'GeometryCollection') {{
+                    (geom.geometries || []).forEach(walk);
+                }}
+            }}
+            if (geojson.type === 'FeatureCollection') (geojson.features || []).forEach(f => walk(f.geometry));
+            else if (geojson.type === 'Feature') walk(geojson.geometry);
+            else walk(geojson);
+            if (holes.length === 0) return null;
+            return {{
+                type: 'Feature', properties: {{}},
+                geometry: {{ type: 'Polygon', coordinates: [MASK_WORLD_RING].concat(holes) }},
+            }};
+        }}
+
+        function addMaskLayer(assetId, geojson, maskCfg, vis) {{
+            const cfg = parseMask(maskCfg);
+            if (!cfg) return null;
+            const maskGeo = buildMaskGeoJSON(geojson);
+            if (!maskGeo) return null;
+            const reg = assetRegistry[assetId];
+            const maskSrcId = 'mask-src-' + assetId;
+            const maskId = 'mask-' + assetId;
+            if (map.getLayer(maskId)) map.removeLayer(maskId);
+            if (map.getSource(maskSrcId)) map.removeSource(maskSrcId);
+            map.addSource(maskSrcId, {{ type: 'geojson', data: maskGeo }});
+            // Sit just below the asset's own fill (or line) so outline/label stay on top.
+            const beforeId = map.getLayer('fill-' + assetId) ? 'fill-' + assetId
+                : (map.getLayer('line-' + assetId) ? 'line-' + assetId : undefined);
+            const spec = {{
+                id: maskId, type: 'fill', source: maskSrcId,
+                paint: {{ 'fill-color': cfg.color, 'fill-opacity': cfg.opacity }},
+                layout: {{ visibility: vis || 'visible' }},
+            }};
+            try {{ map.addLayer(spec, beforeId); }} catch (e) {{ map.addLayer(spec); }}
+            if (reg) {{
+                // First in layerIds so move_layer re-stacks keep it beneath the outline.
+                if (!reg.layerIds.includes(maskId)) reg.layerIds.unshift(maskId);
+                reg.maskSrcId = maskSrcId;
+            }}
+            return maskId;
+        }}
+
+        function removeMaskLayer(assetId) {{
+            const maskSrcId = 'mask-src-' + assetId;
+            const maskId = 'mask-' + assetId;
+            try {{
+                if (map.getLayer(maskId)) map.removeLayer(maskId);
+                if (map.getSource(maskSrcId)) map.removeSource(maskSrcId);
+            }} catch (e) {{}}
+            const reg = assetRegistry[assetId];
+            if (reg) {{
+                const i = reg.layerIds.indexOf(maskId);
+                if (i !== -1) reg.layerIds.splice(i, 1);
+                delete reg.maskSrcId;
+            }}
+        }}
+
         // ─── Hover highlight (feature-state) ───
         // Polygon fills brighten under the cursor. Uses generateId'd feature
         // ids on the GeoJSON source; the fill layer's fill-opacity is a
@@ -1231,7 +1320,10 @@ async def serve_map(map_id: str, request: Request):
             const srcId = 'src-' + assetId;
             const vis = visible !== false ? 'visible' : 'none';
             const s = style || {{}};
-            const fillColor = getStyleProp(s, 'fill_color', DEFAULT_STYLE.fill_color);
+            // style.mask without an explicit fill_color → transparent interior
+            // (the spotlight look: bare map inside, dimmed outside).
+            const fillColor = (s.mask && !s.fill_color) ? 'rgba(0,0,0,0)'
+                : getStyleProp(s, 'fill_color', DEFAULT_STYLE.fill_color);
             const strokeColor = getStyleProp(s, 'stroke_color', DEFAULT_STYLE.stroke_color);
             const strokeWidth = getStyleProp(s, 'stroke_width', DEFAULT_STYLE.stroke_width);
             const lineDash = (Array.isArray(s.line_dash) && s.line_dash.length > 0) ? s.line_dash : null;
@@ -1293,10 +1385,13 @@ async def serve_map(map_id: str, request: Request):
             const labelId = addLabelLayer(assetId, srcId, s, vis, name, geomTypes);
             if (labelId) layerIds.push(labelId);
 
-            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes) }};
+            // geojson kept so update_style can rebuild the mask layer later.
+            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson }};
 
             // Optional glow (style.glow): pulsing opacity animation
             if (s.glow) registerGlow(assetId, s.glow);
+            // Optional mask (style.mask): darken everything outside the polygon
+            if (s.mask && geomTypes.has('fill')) addMaskLayer(assetId, geojson, s.mask, vis);
         }}
 
         // ─── Add Image Overlay (GeoTIFF) ───
@@ -1506,6 +1601,7 @@ async def serve_map(map_id: str, request: Request):
                         if (map.getLayer(lid)) map.removeLayer(lid);
                     }}
                     if (map.getSource(reg.srcId)) map.removeSource(reg.srcId);
+                    if (reg.maskSrcId && map.getSource(reg.maskSrcId)) map.removeSource(reg.maskSrcId);
                     delete assetRegistry[data.asset_id];
                 }}
                 if (deckArcs[data.asset_id]) {{
@@ -1575,6 +1671,31 @@ async def serve_map(map_id: str, request: Request):
                     if (s.glow !== undefined) {{
                         unregisterGlow(data.asset_id);
                         if (s.glow) registerGlow(data.asset_id, s.glow);
+                    }}
+                    // Mask add/remove/re-tune via update_style. Rebuilds from
+                    // the asset's own GeoJSON source; the fill layer is left
+                    // untouched unless mask is being turned ON with no fill
+                    // color — then the interior is cleared to the bare map.
+                    if (s.mask !== undefined) {{
+                        const wasVisible = (() => {{
+                            const fid = 'fill-' + data.asset_id;
+                            return map.getLayer(fid) ? (map.getLayoutProperty(fid, 'visibility') || 'visible') : 'visible';
+                        }})();
+                        removeMaskLayer(data.asset_id);
+                        if (s.mask) {{
+                            let geo = reg.geojson || null;
+                            if (!geo) {{
+                                const src = map.getSource(reg.srcId);
+                                if (src && src._data) geo = (typeof src._data === 'string') ? JSON.parse(src._data) : src._data;
+                            }}
+                            if (geo) {{
+                                addMaskLayer(data.asset_id, geo, s.mask, wasVisible);
+                                const fid = 'fill-' + data.asset_id;
+                                if (!s.fill_color && map.getLayer(fid)) {{
+                                    map.setPaintProperty(fid, 'fill-color', 'rgba(0,0,0,0)');
+                                }}
+                            }}
+                        }}
                     }}
                 }}
             }},
@@ -1808,6 +1929,7 @@ async def serve_map(map_id: str, request: Request):
             const userSourceIds = new Set();
             for (const reg of Object.values(assetRegistry)) {{
                 if (reg && reg.srcId) userSourceIds.add(reg.srcId);
+                if (reg && reg.maskSrcId) userSourceIds.add(reg.maskSrcId);
             }}
             const userSources = {{}};
             const userLayers = [];

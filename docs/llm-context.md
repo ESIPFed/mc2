@@ -58,6 +58,8 @@ STYLE dict keys (all optional)
     label_placement: "perimeter" | "center" | "point"
     label_color: "#ffffff", label_size: 14
     glow: True                     # pulse to draw attention (or {"period": 2.5})
+    mask: True                     # spotlight: darken everything OUTSIDE the polygon
+                                   # (or {"color": "#000000", "opacity": 0.6}); polygons only
 
 CAMERA
     session.zoom_to_point(lon, lat, zoom=12)

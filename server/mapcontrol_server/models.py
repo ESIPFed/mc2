@@ -39,6 +39,14 @@ class AssetStyle(BaseModel):
     # The asset slowly fades between translucent and opaque — a client-side
     # rAF loop; False/None = static. Works on fills, lines, and circles.
     glow: bool | dict[str, Any] | None = None
+    # ─── Mask (spotlight / focus effect) ───
+    # True → defaults; or {"color": "#000000", "opacity": 0.55}.
+    # Darkens everything OUTSIDE the polygon(s): a world-sized fill with the
+    # asset's outer rings punched out as holes is inserted just below the
+    # asset, so the interior shows the bare map while the exterior is dimmed.
+    # When mask is set and no fill_color is given, the polygon's own fill is
+    # transparent. Polygon/MultiPolygon only; False/None = no mask.
+    mask: bool | dict[str, Any] | None = None
 
 
 

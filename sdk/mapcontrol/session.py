@@ -721,6 +721,8 @@ class MapSession:
                 label_size=s.get("label_size"),
                 label_placement=s.get("label_placement"),
                 color_by=s.get("color_by"),
+                glow=s.get("glow"),
+                mask=s.get("mask"),
             )
         metadata = None
         if data.get("metadata"):

@@ -26,6 +26,12 @@ class Style:
         glow: True → defaults, or {"period": 2.0 (seconds per cycle),
             "min_opacity": 0.15, "max_opacity": 0.85, "stroke": True} —
             the asset slowly fades between translucent and opaque.
+
+    Mask (spotlight / focus effect):
+        mask: True → defaults, or {"color": "#000000", "opacity": 0.55} —
+            everything OUTSIDE the polygon is darkened while the interior
+            shows the bare map. If no fill_color is given the polygon's own
+            fill is transparent. Polygon/MultiPolygon assets only.
     """
     fill_color: str | None = None
     stroke_color: str | None = None
@@ -37,6 +43,7 @@ class Style:
     label_placement: str | None = None
     color_by: dict[str, Any] | None = None
     glow: bool | dict[str, Any] | None = None
+    mask: bool | dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in {
@@ -50,6 +57,7 @@ class Style:
             "label_placement": self.label_placement,
             "color_by": self.color_by,
             "glow": self.glow,
+            "mask": self.mask,
         }.items() if v is not None}
 
 

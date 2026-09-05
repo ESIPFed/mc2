@@ -74,6 +74,49 @@ async def test_update_asset_style(client, map_with_asset):
     assert resp.json()["style"]["fill_color"] == "#00ff00"
 
 
+@pytest.mark.parametrize("mask", [True, {"color": "#0b1020", "opacity": 0.8}])
+async def test_add_polygon_mask_style_roundtrip(client, mask):
+    """style.mask (spotlight) persists on add_polygon and comes back on GET."""
+    map_resp = await client.post("/api/maps")
+    map_id = map_resp.json()["map_id"]
+
+    event_resp = await client.post(f"/api/maps/{map_id}/events", json={
+        "type": "add_polygon",
+        "data": {
+            "geojson": SAMPLE_GEOJSON,
+            "name": "Masked AOI",
+            "style": {"stroke_color": "#ffffff", "stroke_width": 3, "mask": mask},
+        }
+    })
+    assert event_resp.status_code == 200
+    asset_id = event_resp.json()["asset_id"]
+
+    resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
+    assert resp.status_code == 200
+    assert resp.json()["style"]["mask"] == mask
+
+
+async def test_update_style_mask_toggle(client, map_with_asset):
+    """update_style can turn the mask on, retune it, and turn it off."""
+    map_id, asset_id = map_with_asset
+
+    resp = await client.post(f"/api/maps/{map_id}/events", json={
+        "type": "update_style",
+        "data": {"asset_id": asset_id, "style": {"mask": True}},
+    })
+    assert resp.status_code == 200
+    resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
+    assert resp.json()["style"]["mask"] is True
+
+    resp = await client.post(f"/api/maps/{map_id}/events", json={
+        "type": "update_style",
+        "data": {"asset_id": asset_id, "style": {"mask": False}},
+    })
+    assert resp.status_code == 200
+    resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
+    assert resp.json()["style"]["mask"] is False
+
+
 async def test_delete_asset(client, map_with_asset):
     map_id, asset_id = map_with_asset
     resp = await client.delete(f"/api/maps/{map_id}/assets/{asset_id}")

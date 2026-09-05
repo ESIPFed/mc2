@@ -492,6 +492,8 @@ async def add_geojson(
             label_color/label_size tune the text. Gradients: style.color_by =
             {"property": <feature prop>, "ramp": "viridis|magma|plasma|blues|reds|greens",
             "domain": [min, max]} colors features by a numeric property.
+            Spotlight: style.mask=True (or {"color": "#000", "opacity": 0.6})
+            darkens everything OUTSIDE a polygon; the interior shows the bare map.
     """
     await _require_map(map_id)
     obj = _parse_geojson(geojson)
@@ -805,7 +807,8 @@ async def update_style(map_id: str, asset_id: str, style: AssetStyle) -> dict[st
     Also controls labels: style.label=True renders the asset name as map text
     (a string gives custom text; False removes the label); label_placement is
     'point' | 'center' | 'perimeter' (text along the polygon outline / line);
-    label_color / label_size tune the text appearance.
+    label_color / label_size tune the text appearance. style.mask=True darkens
+    everything outside a polygon (spotlight); False removes the mask.
     """
     await _require_map(map_id)
     result = await event_service.process_event(
