@@ -185,7 +185,12 @@ class AssetResponse(BaseModel):
     map_id: str
     name: str | None = None
     asset_type: str
-    geojson: dict[str, Any] | str
+    # None in summary responses (list_assets include_geojson=False) — pollers
+    # like layer managers don't need multi-MB geometry every few seconds.
+    geojson: dict[str, Any] | str | None
+    # [minLon, minLat, maxLon, maxLat], precomputed at creation. None for rows
+    # created before the bbox column existed and for empty geometries.
+    bbox: list[float] | None = None
     style: AssetStyle | None = None
     metadata: AssetMetadata | None = None
     visible: bool = True

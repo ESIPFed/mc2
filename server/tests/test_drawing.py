@@ -212,3 +212,41 @@ async def test_drawn_asset_style_can_be_updated(client, map_id):
     assert resp.status_code == 200
     data = resp.json()
     assert data["style"]["fill_color"] == "#ff0000"
+
+
+def test_user_drawn_feature_echoes_client_id():
+    """The WS draw round trip carries the client's correlation id back in BOTH
+    the add_polygon broadcast and the draw_complete confirmation, so the
+    drawing browser can swap its dashed pending-styled shape for the
+    confirmed asset."""
+    import json
+    from starlette.testclient import TestClient
+    from mapcontrol_server.main import app as _app
+
+    tmp = tempfile.mkdtemp()
+    os.environ["MAPCONTROL_DB_PATH"] = f"{tmp}/test.db"
+    os.environ["MAPCONTROL_FILE_DIR"] = f"{tmp}/files"
+
+    with TestClient(_app) as c:
+        map_id = c.post("/api/maps").json()["map_id"]
+        session_id = c.post(f"/api/maps/{map_id}/sessions").json()["user_session_id"]
+
+        with c.websocket_connect(f"/ws/{map_id}/{session_id}") as ws:
+            ws.send_text(json.dumps({
+                "type": "user_drawn_feature",
+                "data": {
+                    "geojson": DRAWN_POLYGON_GEOJSON,
+                    "draw_type": "polygon",
+                    "client_id": "draw-test-abc123",
+                },
+            }))
+            broadcast = json.loads(ws.receive_text())
+            confirm = json.loads(ws.receive_text())
+
+        assert broadcast["type"] == "add_polygon"
+        assert broadcast["data"]["client_id"] == "draw-test-abc123"
+        assert broadcast["data"]["asset_id"]
+
+        assert confirm["type"] == "draw_complete"
+        assert confirm["data"]["client_id"] == "draw-test-abc123"
+        assert confirm["data"]["asset_id"] == broadcast["data"]["asset_id"]

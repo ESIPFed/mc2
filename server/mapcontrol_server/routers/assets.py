@@ -11,13 +11,19 @@ router = APIRouter(prefix="/api/maps/{map_id}/assets", tags=["assets"])
 
 
 @router.get("", response_model=list[AssetResponse])
-async def list_assets(map_id: str):
-    """List all assets for a map."""
+async def list_assets(map_id: str, include_geojson: bool = True):
+    """List all assets for a map.
+
+    ``include_geojson=false`` omits the geometry (geojson=null, bbox kept) —
+    use it for recurring polls (layer managers) so a map holding multi-MB
+    vector assets doesn't ship them all on every refresh. Fetch a single
+    asset by id when the full geometry is actually needed.
+    """
     info = await session_service.get_map(map_id)
     if info is None:
         raise HTTPException(status_code=404, detail="Map not found")
 
-    return await asset_service.list_assets(map_id)
+    return await asset_service.list_assets(map_id, include_geojson=include_geojson)
 
 
 @router.get("/{asset_id}", response_model=AssetResponse)

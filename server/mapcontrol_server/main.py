@@ -216,6 +216,10 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                 draw_data = msg.get("data", {})
                 geojson_str = draw_data.get("geojson", "")
                 draw_type = draw_data.get("draw_type", "polygon")
+                # Client-generated correlation id: the drawing browser renders
+                # the shape immediately in a "pending" style and swaps it for
+                # the confirmed asset when this id round-trips.
+                client_id = draw_data.get("client_id", "")
                 asset_type = f"drawn_{draw_type}"
                 name = draw_data.get("name", f"User drawn {draw_type}")
 
@@ -239,13 +243,16 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                         f"type={asset_type} map={map_id} session={user_session_id}"
                     )
 
-                    # Broadcast the new asset to all sessions as an add_polygon event
+                    # Broadcast the new asset to all sessions as an add_polygon
+                    # event. client_id lets the drawing session replace its
+                    # pending-styled shape; other sessions ignore it.
                     broadcast_msg = {
                         "type": "add_polygon",
                         "data": {
                             "asset_id": asset.asset_id,
                             "geojson": geojson_str,
                             "style": style.model_dump(),
+                            "client_id": client_id,
                         },
                     }
                     await manager.broadcast_to_map(map_id, broadcast_msg)
@@ -257,6 +264,7 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                             "asset_id": asset.asset_id,
                             "asset_type": asset_type,
                             "draw_type": draw_type,
+                            "client_id": client_id,
                         },
                     }))
                 except Exception as e:
@@ -1700,6 +1708,52 @@ async def serve_map(map_id: str, request: Request):
             renderDeckArcs();
         }}
 
+        // ─── Pending draws (optimistic rendering with an honest style) ───
+        // A finished drawing renders IMMEDIATELY in a dashed "pending" style
+        // and is swapped for the solid server-confirmed asset when the
+        // add_polygon echo (carrying our client_id) round-trips. The dash is
+        // deliberate signal, not decoration: the server must own the shape
+        // before EOGPT can operate on it, so a shape that STAYS dashed tells
+        // a user on a bad connection that it has not landed yet — instead of
+        // silently pretending it did (or, worse, the old behavior: removing
+        // it and showing nothing until the round trip completed).
+        const pendingDraws = {{}};  // client_id -> {{ srcId, layerIds }}
+
+        function addPendingDraw(clientId, geojson) {{
+            const srcId = 'pending-src-' + clientId;
+            const fillId = 'pending-fill-' + clientId;
+            const lineId = 'pending-line-' + clientId;
+            try {{
+                map.addSource(srcId, {{ type: 'geojson', data: geojson }});
+                map.addLayer({{
+                    id: fillId, type: 'fill', source: srcId,
+                    filter: ['==', '$type', 'Polygon'],
+                    paint: {{ 'fill-color': '#4264fb', 'fill-opacity': 0.08 }},
+                }});
+                map.addLayer({{
+                    id: lineId, type: 'line', source: srcId,
+                    paint: {{
+                        'line-color': '#4264fb', 'line-width': 2,
+                        'line-dasharray': [2, 2], 'line-opacity': 0.9,
+                    }},
+                }});
+                pendingDraws[clientId] = {{ srcId, layerIds: [fillId, lineId] }};
+            }} catch (e) {{
+                console.warn('Could not render pending draw:', e);
+            }}
+        }}
+
+        function removePendingDraw(clientId) {{
+            if (!clientId) return;
+            const pending = pendingDraws[clientId];
+            if (!pending) return;
+            for (const lid of pending.layerIds) {{
+                if (map.getLayer(lid)) map.removeLayer(lid);
+            }}
+            if (map.getSource(pending.srcId)) map.removeSource(pending.srcId);
+            delete pendingDraws[clientId];
+        }}
+
         // ─── Event Handlers ───
         const handlers = {{
             // ─── Navigation: uses MapLibre native flyTo (van Wijk algorithm) ───
@@ -1733,7 +1787,12 @@ async def serve_map(map_id: str, request: Request):
             }},
 
             // ─── Asset creation ───
-            add_polygon(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon'); }},
+            add_polygon(data) {{
+                // Drawn-shape echo: drop our pending-styled copy first (no-op
+                // for other sessions / agent-created polygons).
+                removePendingDraw(data.client_id);
+                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon');
+            }},
             add_polygon_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon'); }},
             add_path(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path'); }},
             add_path_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path'); }},
@@ -1943,10 +2002,16 @@ async def serve_map(map_id: str, request: Request):
             }},
 
             // ─── Drawn asset from server (add_drawn_polygon) ───
-            add_drawn_polygon(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'drawn_polygon'); }},
+            add_drawn_polygon(data) {{
+                removePendingDraw(data.client_id);
+                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'drawn_polygon');
+            }},
 
             // ─── Draw confirmation (push to undo stack) ───
             draw_complete(data) {{
+                // Belt-and-braces: the add_polygon broadcast normally clears
+                // the pending copy, but draw_complete also carries client_id.
+                removePendingDraw(data.client_id);
                 if (data.asset_id) {{
                     drawnAssetStack.push(data.asset_id);
                     updateUndoButton();
@@ -2105,6 +2170,10 @@ async def serve_map(map_id: str, request: Request):
             const userSourceIds = new Set();
             for (const reg of Object.values(assetRegistry)) {{
                 if (reg && reg.srcId) userSourceIds.add(reg.srcId);
+            }}
+            // Unconfirmed drawn shapes survive a basemap switch too.
+            for (const pending of Object.values(pendingDraws)) {{
+                if (pending && pending.srcId) userSourceIds.add(pending.srcId);
             }}
             if (map.getSource(MASK_SRC_ID)) userSourceIds.add(MASK_SRC_ID);
             const userSources = {{}};
@@ -2447,6 +2516,15 @@ async def serve_map(map_id: str, request: Request):
 
                     console.log('Geoman draw complete:', drawType, e.shape, geojson);
 
+                    // Render the shape RIGHT NOW in the dashed pending style,
+                    // then swap it for the confirmed asset when the server's
+                    // add_polygon echo returns this client_id. On a healthy
+                    // link the swap is near-instant; on a congested one the
+                    // shape stays visibly dashed until it lands server-side.
+                    const clientId = 'draw-' + Date.now().toString(36) + '-' +
+                        Math.random().toString(36).slice(2, 8);
+                    addPendingDraw(clientId, geojson);
+
                     // Send to server via WebSocket
                     if (ws && ws.readyState === WebSocket.OPEN) {{
                         ws.send(JSON.stringify({{
@@ -2454,12 +2532,18 @@ async def serve_map(map_id: str, request: Request):
                             data: {{
                                 geojson: geojsonStr,
                                 draw_type: drawType,
+                                client_id: clientId,
                             }}
                         }}));
+                    }} else {{
+                        // Socket down: the dashed shape stays as the honest
+                        // "not landed" signal; session_restore on reconnect
+                        // re-syncs confirmed assets.
+                        console.warn('WebSocket not open — drawn shape kept pending');
                     }}
 
-                    // Remove the Geoman-drawn feature from the map
-                    // (server will broadcast back as a proper asset)
+                    // Remove the Geoman-drawn feature (the pending layer has
+                    // replaced it; the server broadcast will add the asset)
                     try {{
                         featureData.removeGeoJson();
                     }} catch (err) {{

@@ -13,6 +13,7 @@ Supports:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -384,28 +385,33 @@ async def process_geotiff_rgb(
             tif_path, size_mb = await _download_to_tempfile(source, max_bytes)
             is_temp = True
 
-        # Process
-        rgba, ds = _process_rgb(tif_path, bands, alpha, nodata)
-        bounds = _compute_bounds_4326(ds)
-        band_count = ds.count
-        crs_str = str(ds.crs) if ds.crs else "unknown"
-        ds.close()
+        # Process + PNG encode are CPU-bound (rasterio reads, percentile
+        # stretches, PIL compression) — run off the event loop so WebSocket
+        # traffic (drawn-shape echoes, viewport updates) keeps flowing while
+        # a raster renders.
+        def _render() -> GeoTIFFResult:
+            rgba, ds = _process_rgb(tif_path, bands, alpha, nodata)
+            bounds = _compute_bounds_4326(ds)
+            band_count = ds.count
+            crs_str = str(ds.crs) if ds.crs else "unknown"
+            ds.close()
 
-        # Save PNG
-        img = Image.fromarray(rgba, "RGBA")
-        png_filename = f"{asset_id}.png"
-        png_path = file_dir / png_filename
-        img.save(str(png_path), "PNG")
+            img = Image.fromarray(rgba, "RGBA")
+            png_filename = f"{asset_id}.png"
+            png_path = file_dir / png_filename
+            img.save(str(png_path), "PNG")
 
-        return GeoTIFFResult(
-            png_path=str(png_path),
-            bounds=bounds,
-            width=rgba.shape[1],
-            height=rgba.shape[0],
-            crs=crs_str,
-            band_count=band_count,
-            image_url=f"/api/files/{png_filename}",
-        )
+            return GeoTIFFResult(
+                png_path=str(png_path),
+                bounds=bounds,
+                width=rgba.shape[1],
+                height=rgba.shape[0],
+                crs=crs_str,
+                band_count=band_count,
+                image_url=f"/api/files/{png_filename}",
+            )
+
+        return await asyncio.to_thread(_render)
 
     except ValueError as e:
         msg = str(e)
@@ -483,31 +489,33 @@ async def process_geotiff_singleband(
             tif_path, size_mb = await _download_to_tempfile(source, max_bytes)
             is_temp = True
 
-        # Process
-        rgba, ds = _process_singleband(
-            tif_path, band, colormap, alpha,
-            vmin, vmax, percentile_min, percentile_max, nodata,
-        )
-        bounds = _compute_bounds_4326(ds)
-        band_count = ds.count
-        crs_str = str(ds.crs) if ds.crs else "unknown"
-        ds.close()
+        # CPU-bound render off the event loop — same reasoning as the RGB path.
+        def _render() -> GeoTIFFResult:
+            rgba, ds = _process_singleband(
+                tif_path, band, colormap, alpha,
+                vmin, vmax, percentile_min, percentile_max, nodata,
+            )
+            bounds = _compute_bounds_4326(ds)
+            band_count = ds.count
+            crs_str = str(ds.crs) if ds.crs else "unknown"
+            ds.close()
 
-        # Save PNG
-        img = Image.fromarray(rgba, "RGBA")
-        png_filename = f"{asset_id}.png"
-        png_path = file_dir / png_filename
-        img.save(str(png_path), "PNG")
+            img = Image.fromarray(rgba, "RGBA")
+            png_filename = f"{asset_id}.png"
+            png_path = file_dir / png_filename
+            img.save(str(png_path), "PNG")
 
-        return GeoTIFFResult(
-            png_path=str(png_path),
-            bounds=bounds,
-            width=rgba.shape[1],
-            height=rgba.shape[0],
-            crs=crs_str,
-            band_count=band_count,
-            image_url=f"/api/files/{png_filename}",
-        )
+            return GeoTIFFResult(
+                png_path=str(png_path),
+                bounds=bounds,
+                width=rgba.shape[1],
+                height=rgba.shape[0],
+                crs=crs_str,
+                band_count=band_count,
+                image_url=f"/api/files/{png_filename}",
+            )
+
+        return await asyncio.to_thread(_render)
 
     except ValueError as e:
         msg = str(e)
