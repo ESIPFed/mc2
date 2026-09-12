@@ -912,7 +912,13 @@ async def serve_map(map_id: str, request: Request):
 
         // If the default basemap is vector, init with its style.json URL
         // directly. Otherwise build a raster-only style covering every
-        // raster basemap (vector entries get loaded later via setStyle).
+        // raster basemap. Either way the style loaded here is PERMANENT:
+        // every raster basemap is injected into it (hidden) right after
+        // load, and switching among the loaded vector basemap plus any
+        // raster basemap is pure visibility toggling — see set_basemap. setStyle
+        // (a destructive full-style rebuild that wipes Geoman's internals
+        // and user assets) only remains for the rare "switch to a vector
+        // style that is NOT the loaded one" case.
         const _defaultEntry = BASEMAPS[DEFAULTS.basemap] || {{}};
         const _initialStyle = (_defaultEntry.kind === 'vector')
             ? _defaultEntry.url
@@ -938,6 +944,64 @@ async def serve_map(map_id: str, request: Request):
             delete _mapInit.zoom;
         }}
         const map = new maplibregl.Map(_mapInit);
+
+        // ─── Merged-style basemap bookkeeping ───
+        // Which vector basemap's layers live in the permanent style (null on
+        // raster-init), and the ids of those layers so switches can toggle
+        // the whole group.
+        let loadedVectorBasemap = (_defaultEntry.kind === 'vector') ? DEFAULTS.basemap : null;
+        let vectorLayerIds = [];
+
+        function injectRasterBasemaps() {{
+            // Record which layers belong to the loaded vector style BEFORE
+            // injecting anything. Runs at style load (and after a legacy
+            // vector rebuild) — before Geoman init and asset restore — so
+            // everything present that isn't a raster basemap is the vector
+            // basemap's. gm_* filtered defensively anyway.
+            if (loadedVectorBasemap) {{
+                vectorLayerIds = map.getStyle().layers.map(l => l.id)
+                    .filter(id => !basemapIds.includes(id) && !id.startsWith('gm'));
+            }}
+            const firstId = (map.getStyle().layers[0] || {{}}).id;
+            for (const [id, entry] of Object.entries(BASEMAPS)) {{
+                if ((entry.kind || 'raster') !== 'raster') continue;
+                // Guard on OUR layer id, and namespace the source id: vector
+                // styles can ship sources whose ids collide with basemap ids
+                // (MapTiler hybrid has a source literally named "satellite"),
+                // which silently blocked that basemap's injection.
+                if (map.getLayer(id)) continue;  // raster-init already has them
+                const srcId = 'bm-src-' + id;
+                if (!map.getSource(srcId)) {{
+                    map.addSource(srcId, {{
+                        type: 'raster',
+                        tiles: [entry.url],
+                        tileSize: entry.tile_size || 256,
+                        attribution: entry.attribution || '',
+                        maxzoom: entry.max_zoom || 22,
+                    }});
+                }}
+                // Below everything else: user assets and vector labels
+                // render above an active raster basemap.
+                map.addLayer({{
+                    id: id, type: 'raster', source: srcId,
+                    layout: {{ visibility: currentBasemap === id ? 'visible' : 'none' }},
+                }}, firstId);
+            }}
+        }}
+
+        map.once('style.load', () => {{
+            injectRasterBasemaps();
+            // Apply the default view mode NOW, before the first settled
+            // paint, not at 'load' (which waits for tiles): flipping
+            // mercator→globe seconds after first paint read as the map
+            // "resetting and zooming out", and left vector labels unplaced
+            // until the next interaction.
+            if (currentTerrain && currentTerrain !== '2d') {{
+                try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
+                enableSky();
+                map.jumpTo({{ pitch: 0, bearing: 0 }});
+            }}
+        }});
 
         // ?ui=none — naked canvas: skip every human control (basemap picker,
         // Geoman draw tools). The page still renders assets, replays events,
@@ -1956,47 +2020,66 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 const nextKind = entry.kind || 'raster';
 
-                if (currentBasemapKind === 'raster' && nextKind === 'raster') {{
-                    // Cheap path: just toggle visibility on the raster layers
-                    currentBasemap = name;
+                const showVectorGroup = (visible) => {{
+                    for (const id of vectorLayerIds) {{
+                        if (map.getLayer(id)) {{
+                            map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+                        }}
+                    }}
+                }};
+                const showRasterLayer = (visibleId) => {{
                     for (const id of basemapIds) {{
                         const e = BASEMAPS[id];
                         if ((e.kind || 'raster') !== 'raster') continue;
-                        map.setLayoutProperty(id, 'visibility', id === name ? 'visible' : 'none');
+                        if (map.getLayer(id)) {{
+                            map.setLayoutProperty(id, 'visibility', id === visibleId ? 'visible' : 'none');
+                        }}
                     }}
+                }};
+
+                // Toggle-only switching within the permanent merged style:
+                // any raster target, or returning to the vector basemap the
+                // style was loaded with. Nothing is destroyed — Geoman,
+                // assets, and view state are untouched.
+                if (nextKind === 'raster') {{
+                    showRasterLayer(name);
+                    showVectorGroup(false);
+                    currentBasemap = name;
+                    currentBasemapKind = 'raster';
+                    updateBasemapPickerActive();
+                    sendViewportUpdate();
+                    return;
+                }}
+                if (name === loadedVectorBasemap) {{
+                    showRasterLayer(null);
+                    showVectorGroup(true);
+                    currentBasemap = name;
+                    currentBasemapKind = 'vector';
                     updateBasemapPickerActive();
                     sendViewportUpdate();
                     return;
                 }}
 
-                // Heavy path: setStyle wipes the style, so save/restore user assets
+                // Legacy heavy path — ONLY for a vector style that is not the
+                // loaded one: setStyle wipes the world, so save/restore user
+                // assets. The new vector style then becomes the permanent one
+                // and the raster basemaps are re-injected into it.
                 const userState = captureMapState();
-                // Detach terrain BEFORE setStyle. Swapping styles with terrain
-                // attached corrupts MapLibre's shader cache — the painter then
-                // crashes every frame ("shaderPreludeCode ... undefined" in
-                // terrainDepth, reproduced in Firefox), the map never settles,
-                // and Geoman's source updates stall into literal 60-second
-                // timeouts (drawn shapes appear only when those expire, all at
-                // once). restoreMapState re-attaches terrain from the captured
-                // state once the new style has loaded.
-                try {{ map.setTerrain(null); }} catch (e) {{}}
                 // Register the restore handler BEFORE setStyle: inline object
-                // styles (all raster basemaps) can fire 'style.load'
-                // SYNCHRONOUSLY inside setStyle, so a handler registered on
-                // the next line misses it and the whole user-asset/terrain
+                // styles can fire 'style.load' SYNCHRONOUSLY inside setStyle,
+                // so a handler registered on the next line misses it and the
                 // restore silently never runs (observed in Firefox).
                 map.once('style.load', () => {{
                     currentBasemap = name;
-                    currentBasemapKind = nextKind;
+                    currentBasemapKind = 'vector';
+                    loadedVectorBasemap = name;
+                    vectorLayerIds = [];
+                    injectRasterBasemaps();   // before restore: user layers must not be misclassified
                     restoreMapState(userState);
                     updateBasemapPickerActive();
                     sendViewportUpdate();
                 }});
-                if (nextKind === 'vector') {{
-                    map.setStyle(entry.url);
-                }} else {{
-                    map.setStyle(buildRasterStyle(name));
-                }}
+                map.setStyle(entry.url);
             }},
 
             // ─── Terrain (2D/3D toggle) ───
@@ -2268,38 +2351,13 @@ async def serve_map(map_id: str, request: Request):
                     }}
                 }}
             }}
-            // Terrain DEM source was wiped by setStyle — reset the flag so
-            // ensureTerrainSource re-adds it.
-            terrainSourceAdded = false;
+            // 3d mode is globe projection + sky ONLY — MapLibre's raster-DEM
+            // terrain is retired here (globe+terrain is the half-supported
+            // combination behind the shader-cache crash class; real 3D is the
+            // Babylon/3D-Tiles view's job).
             if (snap.terrain && snap.terrain !== '2d') {{
-                // Re-attach terrain (the switch detached it — see set_basemap —
-                // to avoid MapLibre's terrain shader-cache crash). setTerrain
-                // right at style.load is silently rejected while the style is
-                // still settling, so: try now, and if it didn't stick retry on
-                // idle plus a timed backstop. Idempotent — first success wins.
-                const reattachTerrain = () => {{
-                    if (map.getTerrain()) return true;
-                    try {{
-                        if (!map.getSource('terrain-dem')) {{
-                            terrainSourceAdded = false;  // keep flag truthful
-                            ensureTerrainSource();
-                        }}
-                        // Terrain BEFORE projection: setTerrain issued under an
-                        // already-globe (vertical-perspective) projection gets
-                        // dropped; attached first, it survives the flip.
-                        map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                        map.setProjection({{ type: 'globe' }});
-                        enableSky();
-                    }} catch (e) {{
-                        console.warn('Terrain re-attach attempt failed:', e.message);
-                        return false;
-                    }}
-                    return !!map.getTerrain();
-                }};
-                if (!reattachTerrain()) {{
-                    map.once('idle', reattachTerrain);
-                    setTimeout(reattachTerrain, 3000);
-                }}
+                try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
+                enableSky();
             }}
             try {{
                 map.jumpTo({{
@@ -2369,47 +2427,53 @@ async def serve_map(map_id: str, request: Request):
             if (snapshot.theme) {{
                 applyTheme(snapshot.theme);
             }}
-            // Restore terrain mode BEFORE viewport — setProjection('globe') can
-            // disrupt center/zoom, so we apply terrain first, then set viewport
-            // on the next animation frame once the projection has settled.
-            // Change-only for the same reason as basemap: redundantly re-running
-            // setProjection + setTerrain on every reconnect races any in-flight
-            // style switch and can wedge the renderer (terrain + globe mid-flux
-            // hits MapLibre's terrainDepth painter crash — the map then never
-            // settles, and Geoman's source updates stall into 60s timeouts).
+            // Restore view mode BEFORE viewport — setProjection('globe') can
+            // disrupt center/zoom, so projection first, then viewport on the
+            // next animation frame. Change-only for the same reason as
+            // basemap: snapshots arrive on every reconnect and redundant
+            // projection churn must not happen.
             const snapTerrain = snapshot.terrain;
             if (snapTerrain && snapTerrain !== currentTerrain) {{
+                // 3d = globe projection + sky only (no raster-DEM terrain —
+                // see restoreMapState for why it was retired).
                 if (snapTerrain !== '2d') {{
                     currentTerrain = snapTerrain;
                     try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
-                    ensureTerrainSource();
-                    map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
                     enableSky();
                 }} else {{
                     currentTerrain = '2d';
                     try {{ map.setProjection({{ type: 'mercator' }}); }} catch(e) {{}}
-                    map.setTerrain(null);
                     disableSky();
                 }}
             }}
-            // Terrain restore may have changed projection — re-arbitrate
-            // deck-ribbon vs flat-line for any restored arcs.
+            // Projection may have changed — re-arbitrate deck-ribbon vs
+            // flat-line for any restored arcs.
             syncArcMode();
-            // Restore viewport AFTER terrain so globe projection doesn't
-            // clobber the center/zoom. Use requestAnimationFrame to let
-            // MapLibre finish the projection change before jumping.
+            // Restore viewport AFTER projection so a globe flip doesn't
+            // clobber the center/zoom — and ONLY when it actually differs
+            // from where the camera already is. Snapshots arrive on every
+            // (re)connect; unconditionally re-applying the stored view made
+            // fresh pages visibly "reset" moments after first paint.
             if (snapshot.viewport) {{
-                requestAnimationFrame(function() {{
-                    if (snapshot.viewport.center) {{
+                const v = snapshot.viewport;
+                let alreadyThere = false;
+                if (v.center) {{
+                    const c = map.getCenter();
+                    alreadyThere =
+                        Math.abs(c.lng - v.center[0]) < 1e-3 &&
+                        Math.abs(c.lat - v.center[1]) < 1e-3 &&
+                        Math.abs(map.getZoom() - (v.zoom || DEFAULTS.zoom)) < 0.05;
+                }}
+                if (!alreadyThere) requestAnimationFrame(function() {{
+                    if (v.center) {{
                         map.jumpTo({{
-                            center: snapshot.viewport.center,
-                            zoom: snapshot.viewport.zoom || DEFAULTS.zoom,
-                            pitch: snapshot.viewport.pitch || 0,
-                            bearing: snapshot.viewport.bearing || 0,
+                            center: v.center,
+                            zoom: v.zoom || DEFAULTS.zoom,
+                            pitch: v.pitch || 0,
+                            bearing: v.bearing || 0,
                         }});
-                    }} else if (snapshot.viewport.bbox) {{
-                        const b = snapshot.viewport.bbox;
-                        map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {{
+                    }} else if (v.bbox) {{
+                        map.fitBounds([[v.bbox[0], v.bbox[1]], [v.bbox[2], v.bbox[3]]], {{
                             padding: 50, maxZoom: 18,
                         }});
                     }}
@@ -2558,17 +2622,8 @@ async def serve_map(map_id: str, request: Request):
                     console.log('Cleaned up Geoman controls, keeping only:', allowedTitles);
                 }}, 1000);
 
-                // Apply default terrain mode from config (e.g., '3d' for globe)
-                // Nadir view: globe projection + terrain + sky, pitch forced to 0 (straight down)
-                if (currentTerrain && currentTerrain !== '2d') {{
-                    try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
-                    ensureTerrainSource();
-                    map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                    enableSky();
-                    // Force nadir (straight down) — pitch=0, bearing=0
-                    map.jumpTo({{ pitch: 0, bearing: 0 }});
-                    console.log('Applied default terrain mode: 3D Globe (nadir, pitch=0)');
-                }}
+                // (Default view mode — globe projection + sky — is applied at
+                // 'style.load', before first paint; see the map init block.)
 
                 // Escape key exits all modes
                 document.addEventListener('keydown', function(e) {{
@@ -2794,56 +2849,35 @@ async def serve_map(map_id: str, request: Request):
             exitDeleteMode();
         }}
 
-        // ─── Terrain Mode (2D/3D) ───
-        // AWS Terrain Tiles (Terrarium encoding) — free, no API key
-        const TERRAIN_DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{{z}}/{{x}}/{{y}}.png';
-        let terrainSourceAdded = false;
-
-        function ensureTerrainSource() {{
-            if (terrainSourceAdded) return;
-            if (!map.getSource('terrain-dem')) {{
-                map.addSource('terrain-dem', {{
-                    type: 'raster-dem',
-                    tiles: [TERRAIN_DEM_URL],
-                    tileSize: 256,
-                    encoding: 'terrarium',
-                    maxzoom: 15,
-                }});
-            }}
-            terrainSourceAdded = true;
-        }}
-
+        // ─── View Mode (2D flat / 3D globe) ───
+        // '3d' is GLOBE PROJECTION + SKY only. MapLibre's raster-DEM terrain
+        // is retired: combined with globe (vertical perspective) it is
+        // explicitly half-supported upstream and was the trigger of a
+        // per-frame painter crash class ("shaderPreludeCode ... undefined")
+        // that stalled drawing into 60s Geoman timeouts. Real 3D terrain is
+        // the Babylon/3D-Tiles view's job.
         function applyTerrainMode(mode, animate) {{
             currentTerrain = mode;
             if (mode === '3d') {{
-                // Globe projection for 3D view
                 try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{ console.warn('Globe projection not available:', e.message); }}
-                ensureTerrainSource();
-                map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                // Atmospheric sky for the 3D view
                 enableSky();
                 if (animate) {{
                     map.easeTo({{ pitch: 60, duration: 1500 }});
                 }} else {{
                     map.jumpTo({{ pitch: 60 }});
                 }}
-                console.log('Terrain mode: 3D Globe (pitch 60, terrain on, sky on, globe projection)');
+                console.log('View mode: 3D Globe (pitch 60, sky on, no terrain)');
             }} else {{
                 // 2D mode — flat Mercator
                 try {{ map.setProjection({{ type: 'mercator' }}); }} catch(e) {{ console.warn('Projection switch failed:', e.message); }}
                 if (animate) {{
                     map.easeTo({{ pitch: 0, bearing: 0, duration: 1500 }});
-                    // Remove terrain after animation completes
-                    setTimeout(function() {{
-                        map.setTerrain(null);
-                        disableSky();
-                    }}, 1600);
+                    setTimeout(disableSky, 1600);
                 }} else {{
                     map.jumpTo({{ pitch: 0, bearing: 0 }});
-                    map.setTerrain(null);
                     disableSky();
                 }}
-                console.log('Terrain mode: 2D Flat (mercator)');
+                console.log('View mode: 2D Flat (mercator)');
             }}
             // Projection change flips which arc representation is visible
             // (deck ribbon in mercator, flat line in globe) — and forces a
