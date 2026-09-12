@@ -2305,43 +2305,52 @@ async def serve_map(map_id: str, request: Request):
                     addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible);
                 }}
             }}
-            // Restore basemap. Skip vector entries — they don't have a
-            // MapLibre layer with their id (vector basemaps live behind
-            // setStyle, not as visibility-toggled layers). Snapshot restore
-            // currently only handles raster basemaps; restoring to a vector
-            // basemap from a snapshot would need to go through set_basemap's
-            // setStyle path, which is a deeper change.
-            if (snapshot.basemap && BASEMAPS[snapshot.basemap]) {{
-                const target = snapshot.basemap;
-                const targetEntry = BASEMAPS[target];
-                if ((targetEntry.kind || 'raster') === 'raster') {{
-                    currentBasemap = target;
-                    for (const id of basemapIds) {{
-                        const e = BASEMAPS[id];
-                        if ((e.kind || 'raster') !== 'raster') continue;
-                        map.setLayoutProperty(id, 'visibility', id === target ? 'visible' : 'none');
-                    }}
-                    updateBasemapPickerActive();
-                }}
+            // Restore basemap — ONLY when it actually differs, and always
+            // through the kind-aware set_basemap handler. Snapshots arrive on
+            // every WS (re)connect, so this path must be a no-op when nothing
+            // changed: the old inline raster-toggle ran unconditionally and
+            // assumed raster basemap LAYERS exist — false whenever the live
+            // style is a vector basemap (setLayoutProperty then fires
+            // "Cannot style non-existing layer" and currentBasemap went out
+            // of sync with what is actually displayed). Routing through the
+            // handler also makes vector-basemap restores work (heavy
+            // setStyle path with user-asset + gm_* preservation).
+            // A ?basemap= URL param is an explicit embedder choice (EOGPT pins
+            // the theme-matched hybrid); a stale session-stored basemap must
+            // not override it on (re)connect. Without the param, the stored
+            // basemap is the truth to restore.
+            const urlPinnedBasemap = new URLSearchParams(window.location.search).has('basemap');
+            if (snapshot.basemap && BASEMAPS[snapshot.basemap]
+                && snapshot.basemap !== currentBasemap
+                && !urlPinnedBasemap) {{
+                handlers.set_basemap({{ basemap: snapshot.basemap }});
             }}
-            // Restore theme (map-level; light/dark/auto).
+            // Restore theme (map-level; light/dark/auto). CSS-only, cheap.
             if (snapshot.theme) {{
                 applyTheme(snapshot.theme);
             }}
             // Restore terrain mode BEFORE viewport — setProjection('globe') can
             // disrupt center/zoom, so we apply terrain first, then set viewport
             // on the next animation frame once the projection has settled.
-            if (snapshot.terrain && snapshot.terrain !== '2d') {{
-                currentTerrain = snapshot.terrain;
-                try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
-                ensureTerrainSource();
-                map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
-                enableSky();
-            }} else if (snapshot.terrain === '2d') {{
-                currentTerrain = '2d';
-                try {{ map.setProjection({{ type: 'mercator' }}); }} catch(e) {{}}
-                map.setTerrain(null);
-                disableSky();
+            // Change-only for the same reason as basemap: redundantly re-running
+            // setProjection + setTerrain on every reconnect races any in-flight
+            // style switch and can wedge the renderer (terrain + globe mid-flux
+            // hits MapLibre's terrainDepth painter crash — the map then never
+            // settles, and Geoman's source updates stall into 60s timeouts).
+            const snapTerrain = snapshot.terrain;
+            if (snapTerrain && snapTerrain !== currentTerrain) {{
+                if (snapTerrain !== '2d') {{
+                    currentTerrain = snapTerrain;
+                    try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
+                    ensureTerrainSource();
+                    map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
+                    enableSky();
+                }} else {{
+                    currentTerrain = '2d';
+                    try {{ map.setProjection({{ type: 'mercator' }}); }} catch(e) {{}}
+                    map.setTerrain(null);
+                    disableSky();
+                }}
             }}
             // Terrain restore may have changed projection — re-arbitrate
             // deck-ribbon vs flat-line for any restored arcs.
