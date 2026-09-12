@@ -1971,11 +1971,20 @@ async def serve_map(map_id: str, request: Request):
 
                 // Heavy path: setStyle wipes the style, so save/restore user assets
                 const userState = captureMapState();
-                if (nextKind === 'vector') {{
-                    map.setStyle(entry.url);
-                }} else {{
-                    map.setStyle(buildRasterStyle(name));
-                }}
+                // Detach terrain BEFORE setStyle. Swapping styles with terrain
+                // attached corrupts MapLibre's shader cache — the painter then
+                // crashes every frame ("shaderPreludeCode ... undefined" in
+                // terrainDepth, reproduced in Firefox), the map never settles,
+                // and Geoman's source updates stall into literal 60-second
+                // timeouts (drawn shapes appear only when those expire, all at
+                // once). restoreMapState re-attaches terrain from the captured
+                // state once the new style has loaded.
+                try {{ map.setTerrain(null); }} catch (e) {{}}
+                // Register the restore handler BEFORE setStyle: inline object
+                // styles (all raster basemaps) can fire 'style.load'
+                // SYNCHRONOUSLY inside setStyle, so a handler registered on
+                // the next line misses it and the whole user-asset/terrain
+                // restore silently never runs (observed in Firefox).
                 map.once('style.load', () => {{
                     currentBasemap = name;
                     currentBasemapKind = nextKind;
@@ -1983,6 +1992,11 @@ async def serve_map(map_id: str, request: Request):
                     updateBasemapPickerActive();
                     sendViewportUpdate();
                 }});
+                if (nextKind === 'vector') {{
+                    map.setStyle(entry.url);
+                }} else {{
+                    map.setStyle(buildRasterStyle(name));
+                }}
             }},
 
             // ─── Terrain (2D/3D toggle) ───
@@ -2258,10 +2272,34 @@ async def serve_map(map_id: str, request: Request):
             // ensureTerrainSource re-adds it.
             terrainSourceAdded = false;
             if (snap.terrain && snap.terrain !== '2d') {{
-                try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
-                ensureTerrainSource();
-                try {{ map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }}); }} catch(e) {{}}
-                enableSky();
+                // Re-attach terrain (the switch detached it — see set_basemap —
+                // to avoid MapLibre's terrain shader-cache crash). setTerrain
+                // right at style.load is silently rejected while the style is
+                // still settling, so: try now, and if it didn't stick retry on
+                // idle plus a timed backstop. Idempotent — first success wins.
+                const reattachTerrain = () => {{
+                    if (map.getTerrain()) return true;
+                    try {{
+                        if (!map.getSource('terrain-dem')) {{
+                            terrainSourceAdded = false;  // keep flag truthful
+                            ensureTerrainSource();
+                        }}
+                        // Terrain BEFORE projection: setTerrain issued under an
+                        // already-globe (vertical-perspective) projection gets
+                        // dropped; attached first, it survives the flip.
+                        map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
+                        map.setProjection({{ type: 'globe' }});
+                        enableSky();
+                    }} catch (e) {{
+                        console.warn('Terrain re-attach attempt failed:', e.message);
+                        return false;
+                    }}
+                    return !!map.getTerrain();
+                }};
+                if (!reattachTerrain()) {{
+                    map.once('idle', reattachTerrain);
+                    setTimeout(reattachTerrain, 3000);
+                }}
             }}
             try {{
                 map.jumpTo({{
@@ -2296,13 +2334,15 @@ async def serve_map(map_id: str, request: Request):
                     const lons = coords.map(c => c[0]);
                     const lats = coords.map(c => c[1]);
                     const bounds = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
-                    addImageOverlay(asset.asset_id, imageUrl, bounds, 1.0, asset.visible);
+                    addImageOverlay(asset.asset_id, imageUrl, bounds, 1.0, asset.visible, asset.name, asset.asset_type);
                 }} else if (asset.asset_type === 'arc') {{
                     // 3D deck arc: endpoints recovered from the stored
                     // FeatureCollection's Point features inside addArc.
                     addArc(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name);
                 }} else {{
-                    addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible);
+                    // Pass name + type through — losing them on restore left
+                    // hover cards and layer managers with unnamed "vector" rows.
+                    addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, asset.asset_type);
                 }}
             }}
             // Restore basemap — ONLY when it actually differs, and always
