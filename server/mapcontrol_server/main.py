@@ -223,10 +223,13 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                 asset_type = f"drawn_{draw_type}"
                 name = draw_data.get("name", f"User drawn {draw_type}")
 
-                # Default style for drawn features (distinct blue)
+                # Default style for drawn features: the EOGPT earth-green
+                # accent (--eo-accent #7cc242, darker #5fa830 stroke) so
+                # user-drawn shapes read as part of the product, distinct
+                # from agent-added analysis layers.
                 style = AssetStyle(
-                    fill_color="#4264fb",
-                    stroke_color="#4264fb",
+                    fill_color="#7cc242",
+                    stroke_color="#5fa830",
                     stroke_width=2.0,
                 )
 
@@ -1755,12 +1758,12 @@ async def serve_map(map_id: str, request: Request):
                 map.addLayer({{
                     id: fillId, type: 'fill', source: srcId,
                     filter: ['==', '$type', 'Polygon'],
-                    paint: {{ 'fill-color': '#4264fb', 'fill-opacity': 0.08 }},
+                    paint: {{ 'fill-color': '#7cc242', 'fill-opacity': 0.08 }},
                 }});
                 map.addLayer({{
                     id: lineId, type: 'line', source: srcId,
                     paint: {{
-                        'line-color': '#4264fb', 'line-width': 2,
+                        'line-color': '#5fa830', 'line-width': 2,
                         'line-dasharray': [2, 2], 'line-opacity': 0.9,
                     }},
                 }});
