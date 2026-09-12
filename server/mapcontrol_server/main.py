@@ -2205,6 +2205,15 @@ async def serve_map(map_id: str, request: Request):
             for (const pending of Object.values(pendingDraws)) {{
                 if (pending && pending.srcId) userSourceIds.add(pending.srcId);
             }}
+            // Geoman's internal sources (gm_main / gm_temporary / gm_internal)
+            // MUST survive setStyle: if they are wiped, Geoman's
+            // source-update-manager retries against the missing source in an
+            // infinite setTimeout loop — an unbounded error storm (~200/s,
+            // observed OOM-ing a Firefox tab at 20+GB) and drawing goes dead
+            // until a full page reload.
+            for (const id of Object.keys(style.sources || {{}})) {{
+                if (id.startsWith('gm_')) userSourceIds.add(id);
+            }}
             if (map.getSource(MASK_SRC_ID)) userSourceIds.add(MASK_SRC_ID);
             const userSources = {{}};
             const userLayers = [];
