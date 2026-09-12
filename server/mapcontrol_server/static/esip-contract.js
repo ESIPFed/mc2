@@ -70,16 +70,33 @@
     }
 
     // ─── Hover (peek) ─────────────────────────────────────────────────────
+    // The hit-test runs only after the cursor DWELLS for a beat, never on
+    // raw mousemove. queryRenderedFeatures over run-sized vector results
+    // costs ~14ms per call (measured); at 60-120 mousemoves/sec that alone
+    // saturated the main thread the moment the mouse moved, crawling the
+    // draw tools and everything else in the iframe. Hover cards are a
+    // dwell interaction — peek when the pointer settles, stay silent while
+    // it travels. Also fully suppressed while a draw/delete mode is active
+    // (a hover card mid-draw is noise, and draws are mousemove-heavy).
     var hoverId = null;
-    map.on("mousemove", function (e) {
+    var hoverTimer = null;
+    var HOVER_DWELL_MS = 90;
+    function clearHover() {
+      if (hoverId) {
+        emit("asset_hover_end", { asset_id: hoverId });
+        hoverId = null;
+        map.getCanvas().style.cursor = "";
+      }
+    }
+    function hoverProbe(point, lngLat) {
+      if (typeof internals.isDrawing === "function" && internals.isDrawing()) {
+        clearHover();
+        return;
+      }
       var ids = assetLayerIds();
-      var feats = ids.length ? map.queryRenderedFeatures(e.point, { layers: ids }) : [];
+      var feats = ids.length ? map.queryRenderedFeatures(point, { layers: ids }) : [];
       if (feats.length === 0) {
-        if (hoverId) {
-          emit("asset_hover_end", { asset_id: hoverId });
-          hoverId = null;
-          map.getCanvas().style.cursor = "";
-        }
+        clearHover();
         return;
       }
       var aid = assetForLayer(feats[0].layer.id);
@@ -93,10 +110,20 @@
           asset_id: aid,
           name: reg.name || null,
           asset_type: reg.asset_type || null,
-          point: { x: e.point.x, y: e.point.y },
-          lngLat: [e.lngLat.lng, e.lngLat.lat],
+          point: { x: point.x, y: point.y },
+          lngLat: [lngLat.lng, lngLat.lat],
         });
       }
+    }
+    map.on("mousemove", function (e) {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      var point = e.point;
+      var lngLat = e.lngLat;
+      hoverTimer = setTimeout(function () { hoverProbe(point, lngLat); }, HOVER_DWELL_MS);
+    });
+    map.on("mouseout", function () {
+      if (hoverTimer) clearTimeout(hoverTimer);
+      clearHover();
     });
 
     // ─── Click (commit) ───────────────────────────────────────────────────

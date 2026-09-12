@@ -1446,27 +1446,54 @@ async def serve_map(map_id: str, request: Request):
         // Polygon fills brighten under the cursor. Uses generateId'd feature
         // ids on the GeoJSON source; the fill layer's fill-opacity is a
         // feature-state expression (see addGeoJSON).
+        // Feature-state hover highlighting, ONE dwell-gated hit-test shared by
+        // every fill layer. The previous per-layer map.on('mousemove', layerId)
+        // wiring made MapLibre run an internal hit-test per asset on EVERY raw
+        // mousemove — measured ~2ms per layer per move over run-sized results,
+        // which (together with the contract's own per-move query) saturated
+        // the main thread whenever the mouse traveled and crawled the draw
+        // tools. Highlighting is a dwell affordance: probe when the cursor
+        // settles (~90ms), do nothing while it moves or while drawing.
+        const hoverFillSources = new Map();  // fill layerId -> srcId
         function wireHoverHighlight(layerId, srcId) {{
-            let hoveredId = null;
-            map.on('mousemove', layerId, (e) => {{
-                if (!e.features || !e.features.length) return;
-                const fid = e.features[0].id;
-                if (fid === undefined) return;
-                if (hoveredId !== null && hoveredId !== fid) {{
-                    map.setFeatureState({{ source: srcId, id: hoveredId }}, {{ hover: false }});
-                }}
-                hoveredId = fid;
-                map.setFeatureState({{ source: srcId, id: fid }}, {{ hover: true }});
-                map.getCanvas().style.cursor = 'pointer';
-            }});
-            map.on('mouseleave', layerId, () => {{
-                if (hoveredId !== null) {{
-                    map.setFeatureState({{ source: srcId, id: hoveredId }}, {{ hover: false }});
-                }}
-                hoveredId = null;
-                map.getCanvas().style.cursor = '';
-            }});
+            hoverFillSources.set(layerId, srcId);
         }}
+        const hoverHL = {{ srcId: null, fid: null }};
+        function clearHoverHL() {{
+            if (hoverHL.srcId !== null && hoverHL.fid !== null) {{
+                try {{
+                    map.setFeatureState({{ source: hoverHL.srcId, id: hoverHL.fid }}, {{ hover: false }});
+                }} catch (e) {{ /* source may already be gone */ }}
+            }}
+            hoverHL.srcId = null;
+            hoverHL.fid = null;
+            map.getCanvas().style.cursor = '';
+        }}
+        let hoverHLTimer = null;
+        map.on('mousemove', (e) => {{
+            if (hoverHLTimer) clearTimeout(hoverHLTimer);
+            const pt = e.point;
+            hoverHLTimer = setTimeout(() => {{
+                if (currentDrawMode !== null || deleteMode) {{ clearHoverHL(); return; }}
+                const layers = [...hoverFillSources.keys()].filter(id => map.getLayer(id));
+                if (!layers.length) return;
+                const feats = map.queryRenderedFeatures(pt, {{ layers }});
+                if (!feats.length) {{ clearHoverHL(); return; }}
+                const f = feats[0];
+                const srcId = hoverFillSources.get(f.layer.id);
+                if (f.id === undefined || !srcId) return;
+                if (hoverHL.srcId === srcId && hoverHL.fid === f.id) return;
+                clearHoverHL();
+                hoverHL.srcId = srcId;
+                hoverHL.fid = f.id;
+                map.setFeatureState({{ source: srcId, id: f.id }}, {{ hover: true }});
+                map.getCanvas().style.cursor = 'pointer';
+            }}, 90);
+        }});
+        map.on('mouseout', () => {{
+            if (hoverHLTimer) clearTimeout(hoverHLTimer);
+            clearHoverHL();
+        }});
 
         // ─── Add GeoJSON to map ───
         function addGeoJSON(assetId, geojsonStr, style, visible, name, assetType) {{
@@ -2941,6 +2968,9 @@ async def serve_map(map_id: str, request: Request):
             baseUrl: BASE_URL,
             getUserSession: __esipGetUserSession,
             getCurrentBasemap: function () {{ return currentBasemap; }},
+            // Lets the contract suppress hover hit-tests while the user is
+            // actively drawing/deleting (mousemove-heavy interactions).
+            isDrawing: function () {{ return currentDrawMode !== null || deleteMode; }},
         }};
         try {{ window.dispatchEvent(new CustomEvent('esip:internals-ready')); }} catch (e) {{}}
     </script>
