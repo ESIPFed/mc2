@@ -395,7 +395,7 @@ async def serve_map(map_id: str, request: Request):
     #   none     — naked canvas: no basemap picker, no draw tools, no embed
     #              outfit. Only renders assets + emits interaction events
     #              (the canonical ESIP design; what slide embeds want).
-    #   controls — native map controls (basemap picker + Geoman draw tools +
+    #   controls — native map controls (basemap picker + draw toolbar +
     #              attribution) but NO embed outfit. What embedders with
     #              their own management UI (e.g. EOGPT) want.
     #   default  — controls PLUS the built-in "default outfit" (layer panel
@@ -480,7 +480,7 @@ async def serve_map(map_id: str, request: Request):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Map Control</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.css">
-    <link rel="stylesheet" href="https://unpkg.com/@geoman-io/maplibre-geoman-free@0.7.1/dist/maplibre-geoman.css">
+<!-- Terra Draw is headless (no stylesheet) — the draw toolbar is our own themed UI -->
     {ui_head}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -523,9 +523,9 @@ async def serve_map(map_id: str, request: Request):
            The canonical ESIP design: a bare map that only renders assets and
            emits interaction events. No draw toolbar, no basemap picker, no
            custom buttons, no on-map attribution pill. JS below also skips
-           initializing Geoman and the picker control entirely; these rules
-           are the belt-and-suspenders layer for anything that still lands
-           in the DOM.
+           building the draw toolbar and the picker control entirely; these
+           rules are the belt-and-suspenders layer for anything that still
+           lands in the DOM.
            ATTRIBUTION CONTRACT: hiding the pill shifts the provider-credit
            obligation to the EMBEDDING PAGE — anyone iframing a ui=none map
            must render basemap attribution (e.g. "© Esri, © OpenStreetMap
@@ -534,38 +534,43 @@ async def serve_map(map_id: str, request: Request):
         html[data-esip-ui="none"] .maplibregl-ctrl-top-left,
         html[data-esip-ui="none"] .maplibregl-ctrl-bottom-right,
         html[data-esip-ui="none"] .basemap-picker-wrap,
-        html[data-esip-ui="none"] .custom-toolbar,
-        html[data-esip-ui="none"] [class*="gm-control"],
-        html[data-esip-ui="none"] [class*="geoman-control"] {{
+        html[data-esip-ui="none"] .draw-toolbar {{
             display: none !important;
         }}
         /* Custom toolbar buttons (undo, pan, delete) */
-        .custom-toolbar {{
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
+        /* ─── Draw toolbar (Terra Draw is headless — this is our own UI) ──
+           Themed via the tokens above so it follows light/dark live, exactly
+           like the basemap picker. One vertical group, top-left, mirroring
+           the MapLibre control aesthetic without depending on it. */
+        .draw-toolbar {{
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            background: var(--eo-surface);
+            border: 1px solid var(--eo-border);
+            border-radius: 8px;
+            box-shadow: var(--eo-shadow);
+            overflow: hidden;
         }}
-        .custom-toolbar button {{
-            width: 36px;
-            height: 36px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            background: #fff;
+        .draw-toolbar button {{
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-bottom: 1px solid var(--eo-border);
+            background: transparent;
+            color: var(--eo-text-muted);
             cursor: pointer;
-            font-size: 18px;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-            transition: background 0.15s;
+            transition: background 0.15s, color 0.15s;
         }}
-        .custom-toolbar button:hover {{ background: #f0f0f0; }}
-        .custom-toolbar button.active {{ background: #e94560; color: #fff; border-color: #e94560; }}
-        .custom-toolbar button:disabled {{ opacity: 0.4; cursor: default; }}
+        .draw-toolbar button:last-child {{ border-bottom: none; }}
+        .draw-toolbar button:hover {{ background: var(--eo-surface-hover); color: var(--eo-text); }}
+        .draw-toolbar button[aria-pressed="true"] {{
+            background: var(--eo-accent-soft);
+            color: var(--eo-accent);
+        }}
+        .draw-toolbar button svg {{ width: 18px; height: 18px; display: block; }}
         .delete-mode-active {{ cursor: crosshair !important; }}
         /* ─── Basemap picker (collapsed dropdown) ─────────────────────────
            A trigger button that expands into a grouped thumbnail grid.
@@ -692,7 +697,10 @@ async def serve_map(map_id: str, request: Request):
 <body>
     <div id="map"></div>
     <script src="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.js"></script>
-    <script src="https://unpkg.com/@geoman-io/maplibre-geoman-free@0.7.1/dist/maplibre-geoman.umd.js"></script>
+    <!-- Terra Draw (headless drawing, community-maintained) + its MapLibre
+         adapter. Core must load before the adapter (UMD dependency). -->
+    <script src="https://unpkg.com/terra-draw@1.33.0/dist/terra-draw.umd.js"></script>
+    <script src="https://unpkg.com/terra-draw-maplibre-gl-adapter@1.4.1/dist/terra-draw-maplibre-gl-adapter.umd.js"></script>
     <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
     <script>
         const MAP_ID = "{map_id}";
@@ -916,7 +924,7 @@ async def serve_map(map_id: str, request: Request):
         // every raster basemap is injected into it (hidden) right after
         // load, and switching among the loaded vector basemap plus any
         // raster basemap is pure visibility toggling — see set_basemap. setStyle
-        // (a destructive full-style rebuild that wipes Geoman's internals
+        // (a destructive full-style rebuild that wipes the draw tool's layers
         // and user assets) only remains for the rare "switch to a vector
         // style that is NOT the loaded one" case.
         const _defaultEntry = BASEMAPS[DEFAULTS.basemap] || {{}};
@@ -955,12 +963,12 @@ async def serve_map(map_id: str, request: Request):
         function injectRasterBasemaps() {{
             // Record which layers belong to the loaded vector style BEFORE
             // injecting anything. Runs at style load (and after a legacy
-            // vector rebuild) — before Geoman init and asset restore — so
+            // vector rebuild) — before draw-tool init and asset restore — so
             // everything present that isn't a raster basemap is the vector
-            // basemap's. gm_* filtered defensively anyway.
+            // basemap's. Terra Draw's td-* layers filtered defensively anyway.
             if (loadedVectorBasemap) {{
                 vectorLayerIds = map.getStyle().layers.map(l => l.id)
-                    .filter(id => !basemapIds.includes(id) && !id.startsWith('gm'));
+                    .filter(id => !basemapIds.includes(id) && !id.startsWith('td-'));
             }}
             const firstId = (map.getStyle().layers[0] || {{}}).id;
             for (const [id, entry] of Object.entries(BASEMAPS)) {{
@@ -1004,7 +1012,7 @@ async def serve_map(map_id: str, request: Request):
         }});
 
         // ?ui=none — naked canvas: skip every human control (basemap picker,
-        // Geoman draw tools). The page still renders assets, replays events,
+        // draw toolbar). The page still renders assets, replays events,
         // and emits the interaction contract; it just grows no chrome.
         const UI_NAKED = document.documentElement.getAttribute('data-esip-ui') === 'none';
 
@@ -2039,7 +2047,7 @@ async def serve_map(map_id: str, request: Request):
 
                 // Toggle-only switching within the permanent merged style:
                 // any raster target, or returning to the vector basemap the
-                // style was loaded with. Nothing is destroyed — Geoman,
+                // style was loaded with. Nothing is destroyed — Terra Draw,
                 // assets, and view state are untouched.
                 if (nextKind === 'raster') {{
                     showRasterLayer(name);
@@ -2065,6 +2073,15 @@ async def serve_map(map_id: str, request: Request):
                 // assets. The new vector style then becomes the permanent one
                 // and the raster basemaps are re-injected into it.
                 const userState = captureMapState();
+                // Terra Draw: park the mode, stop (removes its td-* layers
+                // cleanly), and start again after the new style loads — its
+                // feature store lives in JS, so this round-trips safely. Any
+                // in-progress (unfinished) sketch is intentionally dropped.
+                if (drawInstance) {{
+                    try {{ drawInstance.setMode('static'); drawInstance.stop(); }} catch (e) {{}}
+                    currentDrawMode = null;
+                    updateDrawToolbar();
+                }}
                 // Register the restore handler BEFORE setStyle: inline object
                 // styles can fire 'style.load' SYNCHRONOUSLY inside setStyle,
                 // so a handler registered on the next line misses it and the
@@ -2076,6 +2093,11 @@ async def serve_map(map_id: str, request: Request):
                     vectorLayerIds = [];
                     injectRasterBasemaps();   // before restore: user layers must not be misclassified
                     restoreMapState(userState);
+                    if (drawInstance) {{
+                        try {{ drawInstance.start(); }} catch (e) {{
+                            console.warn('Terra Draw restart after style switch failed:', e.message);
+                        }}
+                    }}
                     updateBasemapPickerActive();
                     sendViewportUpdate();
                 }});
@@ -2117,12 +2139,15 @@ async def serve_map(map_id: str, request: Request):
 
             // ─── Drawing Control (from SDK/API) ───
             enable_drawing(data) {{
-                const mode = data.mode || 'polygon';
-                if (mode === 'box' || mode === 'rectangle') {{
-                    startDrawBox();
-                }} else {{
-                    startDrawPolygon();
-                }}
+                const mode = (data.mode || 'polygon').toLowerCase();
+                // Normalize SDK aliases onto our draw types (Terra Draw
+                // supports all four natively).
+                const normalized = {{
+                    box: 'box', rectangle: 'box',
+                    polygon: 'polygon', circle: 'circle',
+                    line: 'line', linestring: 'line',
+                }}[mode] || 'polygon';
+                setDrawMode(normalized);
             }},
             disable_drawing(data) {{
                 cancelDraw();
@@ -2302,15 +2327,11 @@ async def serve_map(map_id: str, request: Request):
             for (const pending of Object.values(pendingDraws)) {{
                 if (pending && pending.srcId) userSourceIds.add(pending.srcId);
             }}
-            // Geoman's internal sources (gm_main / gm_temporary / gm_internal)
-            // MUST survive setStyle: if they are wiped, Geoman's
-            // source-update-manager retries against the missing source in an
-            // infinite setTimeout loop — an unbounded error storm (~200/s,
-            // observed OOM-ing a Firefox tab at 20+GB) and drawing goes dead
-            // until a full page reload.
-            for (const id of Object.keys(style.sources || {{}})) {{
-                if (id.startsWith('gm_')) userSourceIds.add(id);
-            }}
+            // (Terra Draw's td-* sources/layers are deliberately NOT captured:
+            // its state lives in its own JS store and the legacy rebuild path
+            // stop()s it before setStyle and start()s it after, which re-adds
+            // its layers cleanly — unlike the retired Geoman, whose internal
+            // bookkeeping could not survive a style rebuild.)
             if (map.getSource(MASK_SRC_ID)) userSourceIds.add(MASK_SRC_ID);
             const userSources = {{}};
             const userLayers = [];
@@ -2412,7 +2433,7 @@ async def serve_map(map_id: str, request: Request):
             // "Cannot style non-existing layer" and currentBasemap went out
             // of sync with what is actually displayed). Routing through the
             // handler also makes vector-basemap restores work (heavy
-            // setStyle path with user-asset + gm_* preservation).
+            // setStyle path with user-asset preservation + Terra Draw restart).
             // A ?basemap= URL param is an explicit embedder choice (EOGPT pins
             // the theme-matched hybrid); a stale session-stored basemap must
             // not override it on (re)connect. Without the param, the stored
@@ -2507,168 +2528,177 @@ async def serve_map(map_id: str, request: Request):
             viewportTimeout = setTimeout(sendViewportUpdate, 300);
         }});
 
-        // ─── Drawing Tools (Geoman for MapLibre) ───
-        let geomanInstance = null;
-        let currentDrawMode = null; // 'polygon', 'circle', 'line', 'rectangle', or null
+        // ─── Drawing Tools (Terra Draw) ───
+        // Headless drawing: Terra Draw keeps its feature store in JS and
+        // treats the map purely as a render target — after any style rebuild
+        // its state is recoverable via stop()/start() (unlike the retired
+        // Geoman, whose internal source bookkeeping could not survive
+        // setStyle and dead-locked into 60s retry timeouts). The toolbar is
+        // entirely ours, themed with the page tokens (light/dark aware).
+        let drawInstance = null;
+        let currentDrawMode = null; // 'polygon' | 'box' | 'circle' | 'line' | null
         let deleteMode = false;
         const drawnAssetStack = []; // undo stack: tracks asset IDs of user-drawn features
 
-        // Initialize Geoman after map loads. On the naked canvas Geoman IS
-        // initialized (so programmatic enable_drawing from the SDK/API keeps
-        // working) but its toolbar is hidden by the ui=none CSS gate and the
-        // custom Pan/Delete buttons are never injected — capability without
-        // chrome.
+        // our draw-type names ↔ Terra Draw mode names
+        const DRAW_MODE_FOR = {{ polygon: 'polygon', box: 'rectangle', circle: 'circle', line: 'linestring' }};
+        const DRAW_TYPE_FOR = {{ polygon: 'polygon', rectangle: 'box', circle: 'circle', linestring: 'line' }};
+
+        // In-progress geometry styled from the live theme tokens so drawing
+        // matches the product in light AND dark (issue: map controls ignored
+        // the theme). Terra Draw validates hex colors — the tokens are hex.
+        function _drawAccent() {{
+            const v = getComputedStyle(document.documentElement)
+                .getPropertyValue('--eo-accent').trim();
+            return /^#[0-9a-fA-F]{{6}}$/.test(v) ? v : '#7cc242';
+        }}
+        function _areaStyles() {{
+            const accent = _drawAccent();
+            return {{
+                fillColor: accent, fillOpacity: 0.12,
+                outlineColor: accent, outlineWidth: 2,
+                closingPointColor: accent, closingPointWidth: 4,
+                closingPointOutlineColor: '#ffffff', closingPointOutlineWidth: 2,
+            }};
+        }}
+        function _lineStyles() {{
+            const accent = _drawAccent();
+            return {{
+                lineStringColor: accent, lineStringWidth: 2,
+                closingPointColor: accent, closingPointWidth: 4,
+                closingPointOutlineColor: '#ffffff', closingPointOutlineWidth: 2,
+            }};
+        }}
+
+        function updateDrawToolbar() {{
+            document.querySelectorAll('.draw-toolbar button[data-draw-mode]').forEach(btn => {{
+                btn.setAttribute('aria-pressed',
+                    btn.getAttribute('data-draw-mode') === currentDrawMode ? 'true' : 'false');
+            }});
+            const del = document.querySelector('.draw-toolbar button[data-role="delete"]');
+            if (del) del.setAttribute('aria-pressed', deleteMode ? 'true' : 'false');
+        }}
+
+        function setDrawMode(mode) {{
+            exitDeleteMode();
+            if (!drawInstance) return;
+            try {{
+                if (mode && DRAW_MODE_FOR[mode]) {{
+                    drawInstance.setMode(DRAW_MODE_FOR[mode]);
+                    currentDrawMode = mode;
+                }} else {{
+                    drawInstance.setMode('static');
+                    currentDrawMode = null;
+                }}
+            }} catch (e) {{
+                console.warn('setDrawMode failed:', e.message);
+            }}
+            updateDrawToolbar();
+        }}
+
+        // Themed toolbar — a real MapLibre control (top-left) so it stacks
+        // with native controls, but every pixel is ours.
+        const DRAW_ICONS = {{
+            polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z"/></svg>',
+            box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
+            circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>',
+            line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 18L10 8l4 6 6-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="5" r="1.6" fill="currentColor"/></svg>',
+            pan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>',
+            del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0l-.8 12a2 2 0 0 1-2 1.9H8.8a2 2 0 0 1-2-1.9L6 7"/></svg>',
+        }};
+
+        class DrawToolbarControl {{
+            onAdd() {{
+                const wrap = document.createElement('div');
+                wrap.className = 'maplibregl-ctrl draw-toolbar';
+                const add = (title, html, onClick, attrs) => {{
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.title = title;
+                    b.innerHTML = html;
+                    b.setAttribute('aria-pressed', 'false');
+                    for (const [k, v] of Object.entries(attrs || {{}})) b.setAttribute(k, v);
+                    b.addEventListener('click', onClick);
+                    wrap.appendChild(b);
+                }};
+                add('Draw polygon', DRAW_ICONS.polygon,
+                    () => setDrawMode(currentDrawMode === 'polygon' ? null : 'polygon'),
+                    {{ 'data-draw-mode': 'polygon' }});
+                add('Draw rectangle', DRAW_ICONS.box,
+                    () => setDrawMode(currentDrawMode === 'box' ? null : 'box'),
+                    {{ 'data-draw-mode': 'box' }});
+                add('Draw circle', DRAW_ICONS.circle,
+                    () => setDrawMode(currentDrawMode === 'circle' ? null : 'circle'),
+                    {{ 'data-draw-mode': 'circle' }});
+                add('Draw line', DRAW_ICONS.line,
+                    () => setDrawMode(currentDrawMode === 'line' ? null : 'line'),
+                    {{ 'data-draw-mode': 'line' }});
+                add('Pan (Esc)', DRAW_ICONS.pan, () => activatePanMode());
+                add('Delete asset (click shape to remove)', DRAW_ICONS.del,
+                    () => {{ toggleDeleteMode(); updateDrawToolbar(); }},
+                    {{ 'data-role': 'delete' }});
+                this._el = wrap;
+                return wrap;
+            }}
+            onRemove() {{
+                this._el && this._el.parentNode && this._el.parentNode.removeChild(this._el);
+            }}
+        }}
+
         map.on('load', function() {{
             try {{
-                geomanInstance = new Geoman.Geoman(map, {{
-                    controls: {{
-                        // ENABLED: the 4 draw tools we want
-                        polygon: {{ uiEnabled: true }},
-                        rectangle: {{ uiEnabled: true }},
-                        circle: {{ uiEnabled: true }},
-                        line: {{ uiEnabled: true }},
-                        // DISABLED: all other draw modes
-                        marker: {{ uiEnabled: false }},
-                        circle_marker: {{ uiEnabled: false }},
-                        ellipse: {{ uiEnabled: false }},
-                        text_marker: {{ uiEnabled: false }},
-                        freehand: {{ uiEnabled: false }},
-                        custom_shape: {{ uiEnabled: false }},
-                        // DISABLED: all edit modes
-                        drag: {{ uiEnabled: false }},
-                        change: {{ uiEnabled: false }},
-                        rotate: {{ uiEnabled: false }},
-                        scale: {{ uiEnabled: false }},
-                        copy: {{ uiEnabled: false }},
-                        cut: {{ uiEnabled: false }},
-                        split: {{ uiEnabled: false }},
-                        union: {{ uiEnabled: false }},
-                        difference: {{ uiEnabled: false }},
-                        line_simplification: {{ uiEnabled: false }},
-                        lasso: {{ uiEnabled: false }},
-                        delete: {{ uiEnabled: false }},
-                        // DISABLED: all helper modes
-                        shape_markers: {{ uiEnabled: false }},
-                        pin: {{ uiEnabled: false }},
-                        snapping: {{ uiEnabled: false }},
-                        snap_guides: {{ uiEnabled: false }},
-                        measurements: {{ uiEnabled: false }},
-                        auto_trace: {{ uiEnabled: false }},
-                        geofencing: {{ uiEnabled: false }},
-                        zoom_to_features: {{ uiEnabled: false }},
-                        click_to_edit: {{ uiEnabled: false }},
-                    }},
+                const td = window.terraDraw;
+                const tda = window.terraDrawMaplibreGlAdapter;
+                drawInstance = new td.TerraDraw({{
+                    adapter: new tda.TerraDrawMapLibreGLAdapter({{ map }}),
+                    modes: [
+                        new td.TerraDrawPolygonMode({{ styles: _areaStyles() }}),
+                        new td.TerraDrawRectangleMode({{ styles: _areaStyles() }}),
+                        new td.TerraDrawCircleMode({{ styles: _areaStyles() }}),
+                        new td.TerraDrawLineStringMode({{ styles: _lineStyles() }}),
+                    ],
                 }});
-                console.log('Geoman initialized successfully');
+                drawInstance.start();
+                console.log('Terra Draw initialized');
 
-                // The free version ignores uiEnabled config.
-                // Remove unwanted controls from the DOM after Geoman renders.
-                // (Skipped in naked mode — the CSS gate hides everything and
-                // there is no toolbar to clean up or inject buttons into.)
-                if (!UI_NAKED) setTimeout(function() {{
-                    const allowedTitles = ['polygon', 'rectangle', 'circle', 'line', 'delete', 'removal', 'remove', 'eraser'];
-                    const controlContainer = document.querySelector('.gm-control-container, .geoman-control-container, [class*="control"]');
-                    // Find all Geoman control buttons and hide unwanted ones
-                    const allBtns = document.querySelectorAll('.maplibregl-ctrl button, .maplibregl-ctrl-group button');
-                    // Also try Geoman-specific selectors
-                    const gmBtns = document.querySelectorAll('[class*="gm"] button, [class*="geoman"] button');
-                    const allControls = new Set([...allBtns, ...gmBtns]);
-                    allControls.forEach(function(btn) {{
-                        const title = (btn.title || btn.getAttribute('aria-label') || '').toLowerCase();
-                        const parentTitle = (btn.parentElement && btn.parentElement.title || '').toLowerCase();
-                        const combined = title + ' ' + parentTitle;
-                        // Keep buttons that match our allowed draw tools
-                        const isAllowed = allowedTitles.some(function(t) {{ return combined.includes(t); }});
-                        // Also keep MapLibre native controls (zoom, compass, attribution)
-                        const isMapLibre = combined.includes('zoom') || combined.includes('compass') || combined.includes('reset');
-                        if (!isAllowed && !isMapLibre && btn.closest('[class*="gm"], [class*="geoman"]')) {{
-                            btn.style.display = 'none';
-                        }}
-                    }});
-                    // Also hide entire control groups that are now empty
-                    document.querySelectorAll('.gm-control-group, [class*="gm-"][class*="group"]').forEach(function(group) {{
-                        const visible = group.querySelectorAll('button:not([style*="display: none"])');
-                        if (visible.length === 0) group.style.display = 'none';
-                    }});
-                    // Now inject our custom Pan and Delete buttons into Geoman's toolbar
-                    // Find the Geoman control container on the left
-                    const gmContainer = document.querySelector('.maplibregl-ctrl-top-left');
-                    if (gmContainer) {{
-                        // Create a small control group for our custom buttons
-                        const customGroup = document.createElement('div');
-                        customGroup.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-                        customGroup.style.marginTop = '4px';
-
-                        // Pan button (hand icon — exits all draw/delete modes)
-                        const panBtn = document.createElement('button');
-                        panBtn.title = 'Pan (Esc)';
-                        panBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10 2a2 2 0 0 1 2 2v6h6a2 2 0 0 1 0 4h-6v6a2 2 0 0 1-4 0v-6H2a2 2 0 0 1 0-4h6V4a2 2 0 0 1 2-2z" opacity="0"/><path fill="currentColor" d="M9 3v8H3a1 1 0 0 0 0 2h6v8a1 1 0 0 0 2 0v-8h8a1 1 0 0 0 0-2h-8V3a1 1 0 0 0-2 0z" opacity="0"/><text x="3" y="19" font-size="18" font-family="sans-serif">✋</text></svg>';
-                        panBtn.style.cssText = 'width:30px;height:30px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
-                        panBtn.onclick = function() {{ activatePanMode(); }};
-                        customGroup.appendChild(panBtn);
-
-                        // Delete button (eraser — our click-to-delete for assets)
-                        const delBtn = document.createElement('button');
-                        delBtn.id = 'gmDeleteBtn';
-                        delBtn.title = 'Delete asset (click shape to remove)';
-                        delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
-                        delBtn.style.cssText = 'width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
-                        delBtn.onclick = function() {{ toggleDeleteMode(); delBtn.classList.toggle('active'); }};
-                        customGroup.appendChild(delBtn);
-
-                        gmContainer.appendChild(customGroup);
-                    }}
-
-                    console.log('Cleaned up Geoman controls, keeping only:', allowedTitles);
-                }}, 1000);
-
-                // (Default view mode — globe projection + sky — is applied at
-                // 'style.load', before first paint; see the map init block.)
-
-                // Escape key exits all modes
-                document.addEventListener('keydown', function(e) {{
-                    if (e.key === 'Escape') {{
-                        activatePanMode();
-                    }}
-                }});
-
-                // Listen for shape creation
-                map.on('gm:create', function(e) {{
-                    const featureData = e.feature;
-                    if (!featureData) return;
-
-                    // Get GeoJSON from the FeatureData object
-                    let geojson;
+                // Re-style in-progress geometry when the theme flips (the
+                // accent differs slightly between light and dark).
+                new MutationObserver(() => {{
+                    if (!drawInstance) return;
                     try {{
-                        geojson = featureData.getGeoJson();
-                    }} catch (err) {{
-                        console.warn('Could not get GeoJSON from feature:', err);
-                        return;
-                    }}
-                    if (!geojson || !geojson.geometry) return;
+                        drawInstance.updateModeOptions('polygon', {{ styles: _areaStyles() }});
+                        drawInstance.updateModeOptions('rectangle', {{ styles: _areaStyles() }});
+                        drawInstance.updateModeOptions('circle', {{ styles: _areaStyles() }});
+                        drawInstance.updateModeOptions('linestring', {{ styles: _lineStyles() }});
+                    }} catch (e) {{ /* styles refresh is cosmetic */ }}
+                }}).observe(document.documentElement, {{ attributes: true, attributeFilter: ['data-theme'] }});
 
-                    // Map Geoman shape names to our draw types
-                    const shapeMap = {{
-                        'rectangle': 'box',
-                        'polygon': 'polygon',
-                        'circle': 'circle',
-                        'line': 'line',
-                    }};
-                    const drawType = shapeMap[e.shape] || 'polygon';
+                // A completed shape: render the dashed pending copy RIGHT NOW,
+                // hand the geometry to the server (echo returns the confirmed
+                // green asset), and clear it from Terra Draw's store — the
+                // asset pipeline owns it from here. The draw mode STAYS active
+                // so consecutive shapes need no re-click.
+                drawInstance.on('finish', function(id, context) {{
+                    if (context && context.action && context.action !== 'draw') return;
+                    const feature = drawInstance.getSnapshot().find(f => f.id === id);
+                    if (!feature || !feature.geometry) return;
+
+                    const mode = (feature.properties && feature.properties.mode) || 'polygon';
+                    const drawType = DRAW_TYPE_FOR[mode] || 'polygon';
+                    const geojson = {{ type: 'Feature', properties: {{}}, geometry: feature.geometry }};
                     const geojsonStr = JSON.stringify(geojson);
 
-                    console.log('Geoman draw complete:', drawType, e.shape, geojson);
+                    console.log('Draw complete:', drawType, mode);
 
-                    // Render the shape RIGHT NOW in the dashed pending style,
-                    // then swap it for the confirmed asset when the server's
-                    // add_polygon echo returns this client_id. On a healthy
-                    // link the swap is near-instant; on a congested one the
-                    // shape stays visibly dashed until it lands server-side.
+                    // Dashed pending copy, swapped for the confirmed asset
+                    // when the server's add_polygon echo returns this
+                    // client_id. Near-instant on a healthy link; on a
+                    // congested one the dash is the honest "not landed on
+                    // the server yet" signal.
                     const clientId = 'draw-' + Date.now().toString(36) + '-' +
                         Math.random().toString(36).slice(2, 8);
                     addPendingDraw(clientId, geojson);
 
-                    // Send to server via WebSocket
                     if (ws && ws.readyState === WebSocket.OPEN) {{
                         ws.send(JSON.stringify({{
                             type: 'user_drawn_feature',
@@ -2679,53 +2709,22 @@ async def serve_map(map_id: str, request: Request):
                             }}
                         }}));
                     }} else {{
-                        // Socket down: the dashed shape stays as the honest
-                        // "not landed" signal; session_restore on reconnect
-                        // re-syncs confirmed assets.
                         console.warn('WebSocket not open — drawn shape kept pending');
                     }}
 
-                    // Remove the Geoman-drawn feature (the pending layer has
-                    // replaced it; the server broadcast will add the asset)
-                    try {{
-                        featureData.removeGeoJson();
-                    }} catch (err) {{
-                        console.warn('Could not remove geoman feature:', err);
-                    }}
-
-                    currentDrawMode = null;
+                    try {{ drawInstance.removeFeatures([id]); }} catch (e) {{}}
                 }});
 
-                // Listen for draw mode toggled off (user deselects a draw button)
-                map.on('gm:drawend', function(e) {{
-                    currentDrawMode = null;
-                    exitDeleteMode();
-                }});
+                if (!UI_NAKED) map.addControl(new DrawToolbarControl(), 'top-left');
 
-                // Listen for draw mode toggled on
-                map.on('gm:drawstart', function(e) {{
-                    exitDeleteMode();
-                    currentDrawMode = e.shape || 'polygon';
-                }});
-
-                // Intercept Geoman's delete/removal mode to use our asset deletion
-                // When user clicks the Geoman delete button, we activate our click-to-delete
-                map.on('gm:globaldeletemodetoggled', function(e) {{
-                    if (e.enabled) {{
-                        // Geoman entered delete mode — add our click handler for assets
-                        deleteMode = true;
-                        map.getCanvas().classList.add('delete-mode-active');
-                        map.on('click', onDeleteClick);
-                        console.log('Delete mode activated (via Geoman button)');
-                    }} else {{
-                        // Geoman exited delete mode
-                        exitDeleteMode();
-                        console.log('Delete mode deactivated');
+                // Escape key exits all modes
+                document.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Escape') {{
+                        activatePanMode();
                     }}
                 }});
-
             }} catch (err) {{
-                console.warn('Geoman init failed (library may not be loaded):', err.message);
+                console.warn('Terra Draw init failed (library may not be loaded):', err.message);
                 console.log('Drawing tools will not be available');
             }}
         }});
@@ -2773,17 +2772,21 @@ async def serve_map(map_id: str, request: Request):
         }}
 
         function enterDeleteMode() {{
-            if (geomanInstance) geomanInstance.disableDraw();
+            if (drawInstance) {{
+                try {{ drawInstance.setMode('static'); }} catch (e) {{}}
+            }}
             currentDrawMode = null;
             deleteMode = true;
             map.getCanvas().classList.add('delete-mode-active');
             map.on('click', onDeleteClick);
+            updateDrawToolbar();
         }}
 
         function exitDeleteMode() {{
             deleteMode = false;
             map.getCanvas().classList.remove('delete-mode-active');
             map.off('click', onDeleteClick);
+            updateDrawToolbar();
         }}
 
         function toggleDeleteMode() {{
@@ -2816,38 +2819,16 @@ async def serve_map(map_id: str, request: Request):
 
         // ─── Pan Mode (exit all draw/delete modes) ───
         function activatePanMode() {{
-            if (geomanInstance) geomanInstance.disableDraw();
-            exitDeleteMode();
-            currentDrawMode = null;
+            setDrawMode(null);
         }}
 
         // Track drawn asset IDs from draw_complete confirmations
         // (added to the undo stack when the server confirms creation)
 
         // SDK/API drawing controls
-        function startDrawPolygon() {{
-            exitDeleteMode();
-            if (geomanInstance) {{
-                currentDrawMode = 'polygon';
-                geomanInstance.enableDraw('polygon');
-            }}
-        }}
-
-        function startDrawBox() {{
-            exitDeleteMode();
-            if (geomanInstance) {{
-                currentDrawMode = 'box';
-                geomanInstance.enableDraw('rectangle');
-            }}
-        }}
-
-        function cancelDraw() {{
-            if (geomanInstance) {{
-                geomanInstance.disableDraw();
-                currentDrawMode = null;
-            }}
-            exitDeleteMode();
-        }}
+        function startDrawPolygon() {{ setDrawMode('polygon'); }}
+        function startDrawBox() {{ setDrawMode('box'); }}
+        function cancelDraw() {{ setDrawMode(null); }}
 
         // ─── View Mode (2D flat / 3D globe) ───
         // '3d' is GLOBE PROJECTION + SKY only. MapLibre's raster-DEM terrain
