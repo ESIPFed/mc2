@@ -56,6 +56,35 @@ async def test_get_asset(client, map_with_asset):
     assert resp.json()["name"] == "Test Polygon"
 
 
+async def test_list_assets_summary_mode(client, map_with_asset):
+    """include_geojson=false omits geometry but keeps the precomputed bbox,
+    so layer-manager pollers can refresh + zoom-to-fit without re-downloading
+    potentially multi-MB geometries every few seconds."""
+    map_id, asset_id = map_with_asset
+    resp = await client.get(
+        f"/api/maps/{map_id}/assets", params={"include_geojson": "false"}
+    )
+    assert resp.status_code == 200
+    assets = resp.json()
+    assert len(assets) == 1
+    assert assets[0]["asset_id"] == asset_id
+    assert assets[0]["geojson"] is None
+    # SAMPLE_GEOJSON spans lon [-97.7, -97.6], lat [30.2, 30.3]
+    assert assets[0]["bbox"] == [-97.7, 30.2, -97.6, 30.3]
+    # Non-geometry fields are intact
+    assert assets[0]["name"] == "Test Polygon"
+    assert assets[0]["style"]["fill_color"] == "#ff0000"
+
+
+async def test_list_assets_default_includes_geojson_and_bbox(client, map_with_asset):
+    map_id, _ = map_with_asset
+    resp = await client.get(f"/api/maps/{map_id}/assets")
+    assert resp.status_code == 200
+    assets = resp.json()
+    assert assets[0]["geojson"] == SAMPLE_GEOJSON
+    assert assets[0]["bbox"] == [-97.7, 30.2, -97.6, 30.3]
+
+
 async def test_update_asset_visibility(client, map_with_asset):
     map_id, asset_id = map_with_asset
     resp = await client.patch(f"/api/maps/{map_id}/assets/{asset_id}", json={

@@ -13,6 +13,7 @@ Supports:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -146,13 +147,39 @@ def _resolve_source(source: str) -> str:
     return source
 
 
+def _bounds_are_geographic(bounds) -> bool:
+    """Whether [minLon, minLat, maxLon, maxLat] fall within valid lon/lat."""
+    lon_min, lat_min, lon_max, lat_max = bounds
+    return (
+        -180.0 <= lon_min <= 180.0
+        and -180.0 <= lon_max <= 180.0
+        and -90.0 <= lat_min <= 90.0
+        and -90.0 <= lat_max <= 90.0
+    )
+
+
 def _compute_bounds_4326(dataset) -> list[float]:
-    """Compute EPSG:4326 bounds from a rasterio dataset."""
+    """Compute EPSG:4326 bounds from a rasterio dataset.
+
+    Raises ValueError when the raster has NO CRS and its coordinates aren't
+    valid lon/lat. Such a file is a projected raster that lost its CRS on
+    write (e.g. a change raster differenced from EPSG:3832 inputs whose
+    profile dropped the CRS): assuming 4326 would silently place the overlay
+    at projected-meter coordinates like (-819450, -487230) — off the map, an
+    invisible "phantom" layer. Failing loud lets the caller surface a real
+    error instead. A CRS-less raster that IS already geographic still works.
+    """
     src_crs = dataset.crs
     if src_crs is None:
-        # No CRS — assume already in 4326
         b = dataset.bounds
-        return [b.left, b.bottom, b.right, b.top]
+        bounds = [b.left, b.bottom, b.right, b.top]
+        if not _bounds_are_geographic(bounds):
+            raise ValueError(
+                "GeoTIFF has no CRS and its coordinates are not longitude/"
+                "latitude — it cannot be georeferenced. Re-export the raster "
+                "with a CRS (e.g. copy the source profile's crs/transform)."
+            )
+        return bounds
 
     bounds = transform_bounds(src_crs, "EPSG:4326", *dataset.bounds)
     return list(bounds)  # [minLon, minLat, maxLon, maxLat]
@@ -384,28 +411,33 @@ async def process_geotiff_rgb(
             tif_path, size_mb = await _download_to_tempfile(source, max_bytes)
             is_temp = True
 
-        # Process
-        rgba, ds = _process_rgb(tif_path, bands, alpha, nodata)
-        bounds = _compute_bounds_4326(ds)
-        band_count = ds.count
-        crs_str = str(ds.crs) if ds.crs else "unknown"
-        ds.close()
+        # Process + PNG encode are CPU-bound (rasterio reads, percentile
+        # stretches, PIL compression) — run off the event loop so WebSocket
+        # traffic (drawn-shape echoes, viewport updates) keeps flowing while
+        # a raster renders.
+        def _render() -> GeoTIFFResult:
+            rgba, ds = _process_rgb(tif_path, bands, alpha, nodata)
+            bounds = _compute_bounds_4326(ds)
+            band_count = ds.count
+            crs_str = str(ds.crs) if ds.crs else "unknown"
+            ds.close()
 
-        # Save PNG
-        img = Image.fromarray(rgba, "RGBA")
-        png_filename = f"{asset_id}.png"
-        png_path = file_dir / png_filename
-        img.save(str(png_path), "PNG")
+            img = Image.fromarray(rgba, "RGBA")
+            png_filename = f"{asset_id}.png"
+            png_path = file_dir / png_filename
+            img.save(str(png_path), "PNG")
 
-        return GeoTIFFResult(
-            png_path=str(png_path),
-            bounds=bounds,
-            width=rgba.shape[1],
-            height=rgba.shape[0],
-            crs=crs_str,
-            band_count=band_count,
-            image_url=f"/api/files/{png_filename}",
-        )
+            return GeoTIFFResult(
+                png_path=str(png_path),
+                bounds=bounds,
+                width=rgba.shape[1],
+                height=rgba.shape[0],
+                crs=crs_str,
+                band_count=band_count,
+                image_url=f"/api/files/{png_filename}",
+            )
+
+        return await asyncio.to_thread(_render)
 
     except ValueError as e:
         msg = str(e)
@@ -483,31 +515,33 @@ async def process_geotiff_singleband(
             tif_path, size_mb = await _download_to_tempfile(source, max_bytes)
             is_temp = True
 
-        # Process
-        rgba, ds = _process_singleband(
-            tif_path, band, colormap, alpha,
-            vmin, vmax, percentile_min, percentile_max, nodata,
-        )
-        bounds = _compute_bounds_4326(ds)
-        band_count = ds.count
-        crs_str = str(ds.crs) if ds.crs else "unknown"
-        ds.close()
+        # CPU-bound render off the event loop — same reasoning as the RGB path.
+        def _render() -> GeoTIFFResult:
+            rgba, ds = _process_singleband(
+                tif_path, band, colormap, alpha,
+                vmin, vmax, percentile_min, percentile_max, nodata,
+            )
+            bounds = _compute_bounds_4326(ds)
+            band_count = ds.count
+            crs_str = str(ds.crs) if ds.crs else "unknown"
+            ds.close()
 
-        # Save PNG
-        img = Image.fromarray(rgba, "RGBA")
-        png_filename = f"{asset_id}.png"
-        png_path = file_dir / png_filename
-        img.save(str(png_path), "PNG")
+            img = Image.fromarray(rgba, "RGBA")
+            png_filename = f"{asset_id}.png"
+            png_path = file_dir / png_filename
+            img.save(str(png_path), "PNG")
 
-        return GeoTIFFResult(
-            png_path=str(png_path),
-            bounds=bounds,
-            width=rgba.shape[1],
-            height=rgba.shape[0],
-            crs=crs_str,
-            band_count=band_count,
-            image_url=f"/api/files/{png_filename}",
-        )
+            return GeoTIFFResult(
+                png_path=str(png_path),
+                bounds=bounds,
+                width=rgba.shape[1],
+                height=rgba.shape[0],
+                crs=crs_str,
+                band_count=band_count,
+                image_url=f"/api/files/{png_filename}",
+            )
+
+        return await asyncio.to_thread(_render)
 
     except ValueError as e:
         msg = str(e)

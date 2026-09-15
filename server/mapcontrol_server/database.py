@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS assets (
     animated INTEGER DEFAULT 0,
     z_index INTEGER DEFAULT 0,
     source_url TEXT,
+    bbox TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -102,6 +103,14 @@ async def init_db(config: AppConfig) -> aiosqlite.Connection:
         await _db.execute(
             "ALTER TABLE assets ADD COLUMN z_index INTEGER DEFAULT 0"
         )
+    except aiosqlite.OperationalError:
+        pass  # column already present
+    # assets.bbox: precomputed [minLon, minLat, maxLon, maxLat] JSON, filled at
+    # create_asset. Lets the asset list serve a geojson-free summary (layer
+    # managers poll it every few seconds) while zoom-to-fit still works.
+    # Pre-existing rows keep NULL — readers fall back to the full geojson.
+    try:
+        await _db.execute("ALTER TABLE assets ADD COLUMN bbox TEXT")
     except aiosqlite.OperationalError:
         pass  # column already present
     await _db.commit()

@@ -12,6 +12,13 @@ from ..database import get_db
 from ..models import AssetResponse, AssetStyle, AssetMetadata, AssetUpdate
 
 
+def _compute_bbox(geojson: str) -> list[float] | None:
+    """[minLon, minLat, maxLon, maxLat] of a geojson string, None if empty."""
+    from .session_service import _compute_bbox_from_geojsons
+
+    return _compute_bbox_from_geojsons([geojson])
+
+
 async def create_asset(
     map_id: str,
     asset_type: str,
@@ -31,6 +38,7 @@ async def create_asset(
 
     style_json = style.model_dump_json() if style else None
     metadata_json = metadata.model_dump_json() if metadata else None
+    bbox = _compute_bbox(geojson)
 
     # New assets stack on top: z_index = current max + 1 for this map.
     cursor = await db.execute(
@@ -41,8 +49,8 @@ async def create_asset(
     z_index = row[0] if row else 0
 
     await db.execute(
-        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)""",
+        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, bbox, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
         (
             asset_id,
             map_id,
@@ -54,6 +62,7 @@ async def create_asset(
             int(animated),
             z_index,
             source_url,
+            json.dumps(bbox) if bbox else None,
             now,
             now,
         ),
@@ -66,6 +75,7 @@ async def create_asset(
         name=name,
         asset_type=asset_type,
         geojson=geojson,
+        bbox=bbox,
         style=style,
         metadata=metadata,
         visible=True,
@@ -104,57 +114,17 @@ async def create_asset_from_url(
     )
 
 
-async def list_assets(map_id: str) -> list[AssetResponse]:
-    """List all assets for a map, bottom-most first (ascending z_index).
-
-    Iterating the result and adding layers in order reproduces the stacking:
-    later rows render on top (MapLibre adds new layers above existing ones).
-    """
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT * FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
-        (map_id,),
-    )
-    rows = await cursor.fetchall()
-
-    assets = []
-    for row in rows:
-        style = AssetStyle.model_validate_json(row["style"]) if row["style"] else None
-        metadata = (
-            AssetMetadata.model_validate_json(row["metadata"])
-            if row["metadata"]
-            else None
-        )
-        assets.append(
-            AssetResponse(
-                asset_id=row["id"],
-                map_id=row["map_id"],
-                name=row["name"],
-                asset_type=row["asset_type"],
-                geojson=row["geojson"],
-                style=style,
-                metadata=metadata,
-                visible=bool(row["visible"]),
-                animated=bool(row["animated"]),
-                z_index=row["z_index"] or 0,
-                source_url=row["source_url"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-        )
-    return assets
-
-
-async def get_asset(map_id: str, asset_id: str) -> AssetResponse | None:
-    """Get a single asset."""
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT * FROM assets WHERE id = ? AND map_id = ?", (asset_id, map_id)
-    )
-    row = await cursor.fetchone()
-    if row is None:
+def _parse_bbox(raw: str | None) -> list[float] | None:
+    if not raw:
         return None
+    try:
+        bbox = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return bbox if isinstance(bbox, list) and len(bbox) == 4 else None
 
+
+def _row_to_asset(row, geojson: str | None) -> AssetResponse:
     style = AssetStyle.model_validate_json(row["style"]) if row["style"] else None
     metadata = (
         AssetMetadata.model_validate_json(row["metadata"])
@@ -166,7 +136,8 @@ async def get_asset(map_id: str, asset_id: str) -> AssetResponse | None:
         map_id=row["map_id"],
         name=row["name"],
         asset_type=row["asset_type"],
-        geojson=row["geojson"],
+        geojson=geojson,
+        bbox=_parse_bbox(row["bbox"]),
         style=style,
         metadata=metadata,
         visible=bool(row["visible"]),
@@ -176,6 +147,51 @@ async def get_asset(map_id: str, asset_id: str) -> AssetResponse | None:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+# Every column except geojson — the summary query must not pull multi-MB
+# geometry strings out of SQLite just to throw them away.
+_SUMMARY_COLUMNS = (
+    "id, map_id, name, asset_type, style, metadata, visible, animated, "
+    "z_index, source_url, bbox, created_at, updated_at"
+)
+
+
+async def list_assets(
+    map_id: str, include_geojson: bool = True
+) -> list[AssetResponse]:
+    """List all assets for a map, bottom-most first (ascending z_index).
+
+    Iterating the result and adding layers in order reproduces the stacking:
+    later rows render on top (MapLibre adds new layers above existing ones).
+
+    ``include_geojson=False`` returns a summary (geojson=None, bbox kept) —
+    the shape layer-manager pollers should request every few seconds, since
+    full geometries can be many MB per asset.
+    """
+    db = await get_db()
+    columns = "*" if include_geojson else _SUMMARY_COLUMNS
+    cursor = await db.execute(
+        f"SELECT {columns} FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
+        (map_id,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        _row_to_asset(row, row["geojson"] if include_geojson else None)
+        for row in rows
+    ]
+
+
+async def get_asset(map_id: str, asset_id: str) -> AssetResponse | None:
+    """Get a single asset."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM assets WHERE id = ? AND map_id = ?", (asset_id, map_id)
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _row_to_asset(row, row["geojson"])
 
 
 async def reorder_assets(map_id: str, asset_ids: list[str]) -> None:

@@ -21,7 +21,10 @@ default_basemap = "satellite"
 # basemap was explicitly chosen (create_map arg, set_basemap, or ?basemap=).
 # Keyless Carto Dark Matter so it works without provider API keys.
 default_dark_basemap = "carto_dark"
-# Default terrain mode: "2d" or "3d" (3d = globe with terrain tiles + sky)
+# Default view mode: "2d" (flat mercator) or "3d" (globe projection + sky).
+# 3d no longer enables MapLibre raster-DEM terrain — globe+terrain is the
+# half-supported combination behind a renderer-crash class; real 3D terrain
+# belongs to the (separate) Babylon/3D-Tiles view.
 default_terrain = "3d"
 
 # ─── Basemap providers ────────────────────────────────────────────────────
