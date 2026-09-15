@@ -147,13 +147,39 @@ def _resolve_source(source: str) -> str:
     return source
 
 
+def _bounds_are_geographic(bounds) -> bool:
+    """Whether [minLon, minLat, maxLon, maxLat] fall within valid lon/lat."""
+    lon_min, lat_min, lon_max, lat_max = bounds
+    return (
+        -180.0 <= lon_min <= 180.0
+        and -180.0 <= lon_max <= 180.0
+        and -90.0 <= lat_min <= 90.0
+        and -90.0 <= lat_max <= 90.0
+    )
+
+
 def _compute_bounds_4326(dataset) -> list[float]:
-    """Compute EPSG:4326 bounds from a rasterio dataset."""
+    """Compute EPSG:4326 bounds from a rasterio dataset.
+
+    Raises ValueError when the raster has NO CRS and its coordinates aren't
+    valid lon/lat. Such a file is a projected raster that lost its CRS on
+    write (e.g. a change raster differenced from EPSG:3832 inputs whose
+    profile dropped the CRS): assuming 4326 would silently place the overlay
+    at projected-meter coordinates like (-819450, -487230) — off the map, an
+    invisible "phantom" layer. Failing loud lets the caller surface a real
+    error instead. A CRS-less raster that IS already geographic still works.
+    """
     src_crs = dataset.crs
     if src_crs is None:
-        # No CRS — assume already in 4326
         b = dataset.bounds
-        return [b.left, b.bottom, b.right, b.top]
+        bounds = [b.left, b.bottom, b.right, b.top]
+        if not _bounds_are_geographic(bounds):
+            raise ValueError(
+                "GeoTIFF has no CRS and its coordinates are not longitude/"
+                "latitude — it cannot be georeferenced. Re-export the raster "
+                "with a CRS (e.g. copy the source profile's crs/transform)."
+            )
+        return bounds
 
     bounds = transform_bounds(src_crs, "EPSG:4326", *dataset.bounds)
     return list(bounds)  # [minLon, minLat, maxLon, maxLat]
