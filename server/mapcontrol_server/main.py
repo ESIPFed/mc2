@@ -574,6 +574,25 @@ async def serve_map(map_id: str, request: Request):
         }}
         .draw-toolbar button svg {{ width: 18px; height: 18px; display: block; }}
         .delete-mode-active {{ cursor: crosshair !important; }}
+        /* Crosshair while a draw mode is armed — MapLibre's grab cursor read
+           as "pan", hiding that the map was ready for sketching. Same
+           class-on-canvas pattern as delete mode; !important outranks the
+           inline cursor MapLibre / the hover-highlight code set. */
+        .draw-mode-active {{ cursor: crosshair !important; }}
+        /* MapLibre's stock control hover (.maplibregl-ctrl button:hover →
+           translucent rgba(0,0,0,.05)) outranks our themed hovers on
+           specificity, blanking the trigger's solid surface over the map on
+           hover. Re-assert the themed surfaces at higher specificity. */
+        .maplibregl-ctrl button.basemap-trigger:not(:disabled):hover {{
+            background-color: var(--eo-surface);
+            border-color: var(--eo-accent);
+        }}
+        .maplibregl-ctrl button.basemap-tile:not(:disabled):hover {{
+            background-color: var(--eo-surface-hover);
+        }}
+        .maplibregl-ctrl.draw-toolbar button:not(:disabled):hover {{
+            background-color: var(--eo-surface-hover);
+        }}
         /* ─── Basemap picker (collapsed dropdown) ─────────────────────────
            A trigger button that expands into a grouped thumbnail grid.
            Styled to match the EO-GPT palette via the theme tokens above.
@@ -1692,6 +1711,7 @@ async def serve_map(map_id: str, request: Request):
             // static value while running.
             if (s.opacity !== undefined && s.opacity !== null) applyStaticOpacity(assetId, s.opacity);
             if ((Array.isArray(s.animate) && s.animate.length > 0) || s.glow) registerAnim(assetId, s);
+            raiseDrawLayers();
         }}
 
         // ─── Add Image Overlay (GeoTIFF) ───
@@ -1740,6 +1760,7 @@ async def serve_map(map_id: str, request: Request):
             }}, beforeId);
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
             assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff' }};
+            raiseDrawLayers();
         }}
 
         // ─── deck.gl overlay: true 3D arcs (sketch 003 → deck ArcLayer) ───
@@ -1861,6 +1882,22 @@ async def serve_map(map_id: str, request: Request):
         // silently pretending it did (or, worse, the old behavior: removing
         // it and showing nothing until the round trip completed).
         const pendingDraws = {{}};  // client_id -> {{ srcId, layerIds }}
+
+        // Keep the live sketch (Terra Draw's td-* layers) and the dashed
+        // pending previews above every asset layer. New asset layers append
+        // to the top of the style and reorder_assets lifts assets with
+        // moveLayer — either buried an in-progress drawing under overlays.
+        // Called after any asset layer add and after reorders.
+        function raiseDrawLayers() {{
+            try {{
+                const layers = (map.getStyle() || {{}}).layers || [];
+                for (const l of layers) {{
+                    if (l.id.startsWith('td-') || l.id.startsWith('pending-')) {{
+                        try {{ map.moveLayer(l.id); }} catch (e) {{ /* mid-rebuild */ }}
+                    }}
+                }}
+            }} catch (e) {{ /* style not ready */ }}
+        }}
 
         function addPendingDraw(clientId, geojson) {{
             const srcId = 'pending-src-' + clientId;
@@ -2326,6 +2363,7 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+                raiseDrawLayers();
                 console.log('Moved layer:', data.asset_id, position);
             }},
 
@@ -2348,6 +2386,7 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+                raiseDrawLayers();
                 console.log('Reordered assets (top first):', data.asset_ids);
             }},
         }};
@@ -2643,6 +2682,9 @@ async def serve_map(map_id: str, request: Request):
             }} catch (e) {{
                 console.warn('setDrawMode failed:', e.message);
             }}
+            // Crosshair while armed (see .draw-mode-active) — the default
+            // grab cursor made it unclear the map was ready for sketching.
+            map.getCanvas().classList.toggle('draw-mode-active', currentDrawMode !== null);
             updateDrawToolbar();
         }}
 
