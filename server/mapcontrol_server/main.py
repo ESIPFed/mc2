@@ -889,6 +889,45 @@ async def serve_map(map_id: str, request: Request):
                     panel.appendChild(grid);
                 }}
 
+                // ── Availability probe ─────────────────────────────────
+                // A basemap whose preview tile can't load almost certainly
+                // can't serve map tiles either (invalid/limited API key,
+                // plan-gated style, provider outage) — config-load only
+                // drops entries whose key env var is UNSET, so a set-but-
+                // broken key still lists them. Probe each thumbnail and
+                // remove failing tiles instead of showing blank previews
+                // that break when clicked. The current basemap is never
+                // removed (it's demonstrably rendering).
+                const containerEl = this._container;
+                const pruneEmptyGroups = () => {{
+                    panel.querySelectorAll('.basemap-group-label').forEach((label) => {{
+                        const grid = label.nextElementSibling;
+                        if (grid && grid.classList.contains('basemap-group-grid') &&
+                            grid.children.length === 0) {{
+                            grid.remove();
+                            label.remove();
+                        }}
+                    }});
+                    if (Object.keys(_basemapTiles).length < 2) {{
+                        containerEl.style.display = 'none';
+                    }}
+                }};
+                for (const id of basemapIds) {{
+                    const entry = BASEMAPS[id];
+                    if (!entry.thumbnail) continue;
+                    const probe = new Image();
+                    probe.onerror = () => {{
+                        if (id === currentBasemap) return;
+                        const tile = _basemapTiles[id];
+                        if (!tile) return;
+                        tile.remove();
+                        delete _basemapTiles[id];
+                        pruneEmptyGroups();
+                        console.warn('Basemap preview tile failed — hidden from picker:', id);
+                    }};
+                    probe.src = entry.thumbnail;
+                }}
+
                 const setOpen = (open) => {{
                     trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
                     panel.setAttribute('data-open', open ? 'true' : 'false');
