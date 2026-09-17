@@ -513,12 +513,14 @@ async def serve_map(map_id: str, request: Request):
         }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         html, body, #map {{ width: 100%; height: 100%; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; }}
-        /* Theme the canvas surround ("space" around the globe / letterboxing):
+        /* The canvas surround ("space" around the globe / letterboxing):
            MapLibre's canvas is transparent where the style paints nothing, so
-           the page background shows through. Bind it to the theme tokens so a
-           dark map is visibly dark even at globe zoom, live-updating with
-           data-theme flips from set_theme / prefers-color-scheme. */
-        html, body, #map {{ background: var(--eo-bg); }}
+           the page background shows through. Space is SPACE in both themes —
+           a deep navy; binding it to --eo-bg made light mode render a white
+           void behind the planet. Page chrome (html/body) keeps the theme
+           background for anything outside the map element. */
+        html, body {{ background: var(--eo-bg); }}
+        #map {{ background: #0b1220; }}
         /* ─── ?ui=none — the naked canvas ─────────────────────────────────
            The canonical ESIP design: a bare map that only renders assets and
            emits interaction events. No draw toolbar, no basemap picker, no
@@ -2485,7 +2487,13 @@ async def serve_map(map_id: str, request: Request):
                 handlers.set_basemap({{ basemap: snapshot.basemap }});
             }}
             // Restore theme (map-level; light/dark/auto). CSS-only, cheap.
-            if (snapshot.theme) {{
+            // Same pinning rule as basemap: an explicit ?theme= from the
+            // embedding page wins over the stored map-level theme, otherwise
+            // a snapshot on WS (re)connect silently flips a light-booted page
+            // to a previously persisted dark (or vice versa). Live set_theme
+            // broadcasts still apply — this only mutes the stale replay.
+            const urlPinnedTheme = new URLSearchParams(window.location.search).has('theme');
+            if (snapshot.theme && !urlPinnedTheme) {{
                 applyTheme(snapshot.theme);
             }}
             // Restore view mode BEFORE viewport — setProjection('globe') can
