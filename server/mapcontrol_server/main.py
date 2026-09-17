@@ -513,12 +513,14 @@ async def serve_map(map_id: str, request: Request):
         }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         html, body, #map {{ width: 100%; height: 100%; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; }}
-        /* Theme the canvas surround ("space" around the globe / letterboxing):
+        /* The canvas surround ("space" around the globe / letterboxing):
            MapLibre's canvas is transparent where the style paints nothing, so
-           the page background shows through. Bind it to the theme tokens so a
-           dark map is visibly dark even at globe zoom, live-updating with
-           data-theme flips from set_theme / prefers-color-scheme. */
-        html, body, #map {{ background: var(--eo-bg); }}
+           the page background shows through. Space is SPACE in both themes —
+           a deep navy; binding it to --eo-bg made light mode render a white
+           void behind the planet. Page chrome (html/body) keeps the theme
+           background for anything outside the map element. */
+        html, body {{ background: var(--eo-bg); }}
+        #map {{ background: #0b1220; }}
         /* ─── ?ui=none — the naked canvas ─────────────────────────────────
            The canonical ESIP design: a bare map that only renders assets and
            emits interaction events. No draw toolbar, no basemap picker, no
@@ -572,6 +574,25 @@ async def serve_map(map_id: str, request: Request):
         }}
         .draw-toolbar button svg {{ width: 18px; height: 18px; display: block; }}
         .delete-mode-active {{ cursor: crosshair !important; }}
+        /* Crosshair while a draw mode is armed — MapLibre's grab cursor read
+           as "pan", hiding that the map was ready for sketching. Same
+           class-on-canvas pattern as delete mode; !important outranks the
+           inline cursor MapLibre / the hover-highlight code set. */
+        .draw-mode-active {{ cursor: crosshair !important; }}
+        /* MapLibre's stock control hover (.maplibregl-ctrl button:hover →
+           translucent rgba(0,0,0,.05)) outranks our themed hovers on
+           specificity, blanking the trigger's solid surface over the map on
+           hover. Re-assert the themed surfaces at higher specificity. */
+        .maplibregl-ctrl button.basemap-trigger:not(:disabled):hover {{
+            background-color: var(--eo-surface);
+            border-color: var(--eo-accent);
+        }}
+        .maplibregl-ctrl button.basemap-tile:not(:disabled):hover {{
+            background-color: var(--eo-surface-hover);
+        }}
+        .maplibregl-ctrl.draw-toolbar button:not(:disabled):hover {{
+            background-color: var(--eo-surface-hover);
+        }}
         /* ─── Basemap picker (collapsed dropdown) ─────────────────────────
            A trigger button that expands into a grouped thumbnail grid.
            Styled to match the EO-GPT palette via the theme tokens above.
@@ -887,6 +908,45 @@ async def serve_map(map_id: str, request: Request):
                         grid.appendChild(tile);
                     }}
                     panel.appendChild(grid);
+                }}
+
+                // ── Availability probe ─────────────────────────────────
+                // A basemap whose preview tile can't load almost certainly
+                // can't serve map tiles either (invalid/limited API key,
+                // plan-gated style, provider outage) — config-load only
+                // drops entries whose key env var is UNSET, so a set-but-
+                // broken key still lists them. Probe each thumbnail and
+                // remove failing tiles instead of showing blank previews
+                // that break when clicked. The current basemap is never
+                // removed (it's demonstrably rendering).
+                const containerEl = this._container;
+                const pruneEmptyGroups = () => {{
+                    panel.querySelectorAll('.basemap-group-label').forEach((label) => {{
+                        const grid = label.nextElementSibling;
+                        if (grid && grid.classList.contains('basemap-group-grid') &&
+                            grid.children.length === 0) {{
+                            grid.remove();
+                            label.remove();
+                        }}
+                    }});
+                    if (Object.keys(_basemapTiles).length < 2) {{
+                        containerEl.style.display = 'none';
+                    }}
+                }};
+                for (const id of basemapIds) {{
+                    const entry = BASEMAPS[id];
+                    if (!entry.thumbnail) continue;
+                    const probe = new Image();
+                    probe.onerror = () => {{
+                        if (id === currentBasemap) return;
+                        const tile = _basemapTiles[id];
+                        if (!tile) return;
+                        tile.remove();
+                        delete _basemapTiles[id];
+                        pruneEmptyGroups();
+                        console.warn('Basemap preview tile failed — hidden from picker:', id);
+                    }};
+                    probe.src = entry.thumbnail;
                 }}
 
                 const setOpen = (open) => {{
@@ -1651,6 +1711,7 @@ async def serve_map(map_id: str, request: Request):
             // static value while running.
             if (s.opacity !== undefined && s.opacity !== null) applyStaticOpacity(assetId, s.opacity);
             if ((Array.isArray(s.animate) && s.animate.length > 0) || s.glow) registerAnim(assetId, s);
+            raiseDrawLayers();
         }}
 
         // ─── Add Image Overlay (GeoTIFF) ───
@@ -1699,6 +1760,7 @@ async def serve_map(map_id: str, request: Request):
             }}, beforeId);
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
             assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff' }};
+            raiseDrawLayers();
         }}
 
         // ─── deck.gl overlay: true 3D arcs (sketch 003 → deck ArcLayer) ───
@@ -1820,6 +1882,22 @@ async def serve_map(map_id: str, request: Request):
         // silently pretending it did (or, worse, the old behavior: removing
         // it and showing nothing until the round trip completed).
         const pendingDraws = {{}};  // client_id -> {{ srcId, layerIds }}
+
+        // Keep the live sketch (Terra Draw's td-* layers) and the dashed
+        // pending previews above every asset layer. New asset layers append
+        // to the top of the style and reorder_assets lifts assets with
+        // moveLayer — either buried an in-progress drawing under overlays.
+        // Called after any asset layer add and after reorders.
+        function raiseDrawLayers() {{
+            try {{
+                const layers = (map.getStyle() || {{}}).layers || [];
+                for (const l of layers) {{
+                    if (l.id.startsWith('td-') || l.id.startsWith('pending-')) {{
+                        try {{ map.moveLayer(l.id); }} catch (e) {{ /* mid-rebuild */ }}
+                    }}
+                }}
+            }} catch (e) {{ /* style not ready */ }}
+        }}
 
         function addPendingDraw(clientId, geojson) {{
             const srcId = 'pending-src-' + clientId;
@@ -2146,6 +2224,7 @@ async def serve_map(map_id: str, request: Request):
                     box: 'box', rectangle: 'box',
                     polygon: 'polygon', circle: 'circle',
                     line: 'line', linestring: 'line',
+                    freedraw: 'freedraw', freehand: 'freedraw',
                 }}[mode] || 'polygon';
                 setDrawMode(normalized);
             }},
@@ -2284,6 +2363,7 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+                raiseDrawLayers();
                 console.log('Moved layer:', data.asset_id, position);
             }},
 
@@ -2306,6 +2386,7 @@ async def serve_map(map_id: str, request: Request):
                 }}
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+                raiseDrawLayers();
                 console.log('Reordered assets (top first):', data.asset_ids);
             }},
         }};
@@ -2445,7 +2526,13 @@ async def serve_map(map_id: str, request: Request):
                 handlers.set_basemap({{ basemap: snapshot.basemap }});
             }}
             // Restore theme (map-level; light/dark/auto). CSS-only, cheap.
-            if (snapshot.theme) {{
+            // Same pinning rule as basemap: an explicit ?theme= from the
+            // embedding page wins over the stored map-level theme, otherwise
+            // a snapshot on WS (re)connect silently flips a light-booted page
+            // to a previously persisted dark (or vice versa). Live set_theme
+            // broadcasts still apply — this only mutes the stale replay.
+            const urlPinnedTheme = new URLSearchParams(window.location.search).has('theme');
+            if (snapshot.theme && !urlPinnedTheme) {{
                 applyTheme(snapshot.theme);
             }}
             // Restore view mode BEFORE viewport — setProjection('globe') can
@@ -2536,13 +2623,15 @@ async def serve_map(map_id: str, request: Request):
         // setStyle and dead-locked into 60s retry timeouts). The toolbar is
         // entirely ours, themed with the page tokens (light/dark aware).
         let drawInstance = null;
-        let currentDrawMode = null; // 'polygon' | 'box' | 'circle' | 'line' | null
+        let currentDrawMode = null; // 'polygon' | 'box' | 'circle' | 'line' | 'freedraw' | null
         let deleteMode = false;
         const drawnAssetStack = []; // undo stack: tracks asset IDs of user-drawn features
 
-        // our draw-type names ↔ Terra Draw mode names
-        const DRAW_MODE_FOR = {{ polygon: 'polygon', box: 'rectangle', circle: 'circle', line: 'linestring' }};
-        const DRAW_TYPE_FOR = {{ polygon: 'polygon', rectangle: 'box', circle: 'circle', linestring: 'line' }};
+        // our draw-type names ↔ Terra Draw mode names. Freehand produces a
+        // polygon geometry, so its finished features re-enter the pipeline
+        // as draw_type 'polygon' — the server needs no new type.
+        const DRAW_MODE_FOR = {{ polygon: 'polygon', box: 'rectangle', circle: 'circle', line: 'linestring', freedraw: 'freehand' }};
+        const DRAW_TYPE_FOR = {{ polygon: 'polygon', rectangle: 'box', circle: 'circle', linestring: 'line', freehand: 'polygon' }};
 
         // In-progress geometry styled from the live theme tokens so drawing
         // matches the product in light AND dark (issue: map controls ignored
@@ -2593,6 +2682,9 @@ async def serve_map(map_id: str, request: Request):
             }} catch (e) {{
                 console.warn('setDrawMode failed:', e.message);
             }}
+            // Crosshair while armed (see .draw-mode-active) — the default
+            // grab cursor made it unclear the map was ready for sketching.
+            map.getCanvas().classList.toggle('draw-mode-active', currentDrawMode !== null);
             updateDrawToolbar();
         }}
 
@@ -2602,6 +2694,7 @@ async def serve_map(map_id: str, request: Request):
             polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z"/></svg>',
             box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
             circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>',
+            freedraw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15c3-6 5-8 6.5-6.5S9 14 11 15s4-5 5.5-4S17 16 20 15"/><path d="M12 20h9" opacity="0.4"/></svg>',
             line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 18L10 8l4 6 6-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="5" r="1.6" fill="currentColor"/></svg>',
             pan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>',
             del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0l-.8 12a2 2 0 0 1-2 1.9H8.8a2 2 0 0 1-2-1.9L6 7"/></svg>',
@@ -2630,6 +2723,9 @@ async def serve_map(map_id: str, request: Request):
                 add('Draw circle', DRAW_ICONS.circle,
                     () => setDrawMode(currentDrawMode === 'circle' ? null : 'circle'),
                     {{ 'data-draw-mode': 'circle' }});
+                add('Draw freehand', DRAW_ICONS.freedraw,
+                    () => setDrawMode(currentDrawMode === 'freedraw' ? null : 'freedraw'),
+                    {{ 'data-draw-mode': 'freedraw' }});
                 add('Draw line', DRAW_ICONS.line,
                     () => setDrawMode(currentDrawMode === 'line' ? null : 'line'),
                     {{ 'data-draw-mode': 'line' }});
@@ -2656,6 +2752,7 @@ async def serve_map(map_id: str, request: Request):
                         new td.TerraDrawRectangleMode({{ styles: _areaStyles() }}),
                         new td.TerraDrawCircleMode({{ styles: _areaStyles() }}),
                         new td.TerraDrawLineStringMode({{ styles: _lineStyles() }}),
+                        new td.TerraDrawFreehandMode({{ styles: _areaStyles() }}),
                     ],
                 }});
                 drawInstance.start();
@@ -2670,6 +2767,7 @@ async def serve_map(map_id: str, request: Request):
                         drawInstance.updateModeOptions('rectangle', {{ styles: _areaStyles() }});
                         drawInstance.updateModeOptions('circle', {{ styles: _areaStyles() }});
                         drawInstance.updateModeOptions('linestring', {{ styles: _lineStyles() }});
+                        drawInstance.updateModeOptions('freehand', {{ styles: _areaStyles() }});
                     }} catch (e) {{ /* styles refresh is cosmetic */ }}
                 }}).observe(document.documentElement, {{ attributes: true, attributeFilter: ['data-theme'] }});
 
