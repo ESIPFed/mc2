@@ -2185,6 +2185,7 @@ async def serve_map(map_id: str, request: Request):
                     box: 'box', rectangle: 'box',
                     polygon: 'polygon', circle: 'circle',
                     line: 'line', linestring: 'line',
+                    freedraw: 'freedraw', freehand: 'freedraw',
                 }}[mode] || 'polygon';
                 setDrawMode(normalized);
             }},
@@ -2575,13 +2576,15 @@ async def serve_map(map_id: str, request: Request):
         // setStyle and dead-locked into 60s retry timeouts). The toolbar is
         // entirely ours, themed with the page tokens (light/dark aware).
         let drawInstance = null;
-        let currentDrawMode = null; // 'polygon' | 'box' | 'circle' | 'line' | null
+        let currentDrawMode = null; // 'polygon' | 'box' | 'circle' | 'line' | 'freedraw' | null
         let deleteMode = false;
         const drawnAssetStack = []; // undo stack: tracks asset IDs of user-drawn features
 
-        // our draw-type names ↔ Terra Draw mode names
-        const DRAW_MODE_FOR = {{ polygon: 'polygon', box: 'rectangle', circle: 'circle', line: 'linestring' }};
-        const DRAW_TYPE_FOR = {{ polygon: 'polygon', rectangle: 'box', circle: 'circle', linestring: 'line' }};
+        // our draw-type names ↔ Terra Draw mode names. Freehand produces a
+        // polygon geometry, so its finished features re-enter the pipeline
+        // as draw_type 'polygon' — the server needs no new type.
+        const DRAW_MODE_FOR = {{ polygon: 'polygon', box: 'rectangle', circle: 'circle', line: 'linestring', freedraw: 'freehand' }};
+        const DRAW_TYPE_FOR = {{ polygon: 'polygon', rectangle: 'box', circle: 'circle', linestring: 'line', freehand: 'polygon' }};
 
         // In-progress geometry styled from the live theme tokens so drawing
         // matches the product in light AND dark (issue: map controls ignored
@@ -2641,6 +2644,7 @@ async def serve_map(map_id: str, request: Request):
             polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z"/></svg>',
             box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
             circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>',
+            freedraw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15c3-6 5-8 6.5-6.5S9 14 11 15s4-5 5.5-4S17 16 20 15"/><path d="M12 20h9" opacity="0.4"/></svg>',
             line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 18L10 8l4 6 6-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="5" r="1.6" fill="currentColor"/></svg>',
             pan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>',
             del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0l-.8 12a2 2 0 0 1-2 1.9H8.8a2 2 0 0 1-2-1.9L6 7"/></svg>',
@@ -2669,6 +2673,9 @@ async def serve_map(map_id: str, request: Request):
                 add('Draw circle', DRAW_ICONS.circle,
                     () => setDrawMode(currentDrawMode === 'circle' ? null : 'circle'),
                     {{ 'data-draw-mode': 'circle' }});
+                add('Draw freehand', DRAW_ICONS.freedraw,
+                    () => setDrawMode(currentDrawMode === 'freedraw' ? null : 'freedraw'),
+                    {{ 'data-draw-mode': 'freedraw' }});
                 add('Draw line', DRAW_ICONS.line,
                     () => setDrawMode(currentDrawMode === 'line' ? null : 'line'),
                     {{ 'data-draw-mode': 'line' }});
@@ -2695,6 +2702,7 @@ async def serve_map(map_id: str, request: Request):
                         new td.TerraDrawRectangleMode({{ styles: _areaStyles() }}),
                         new td.TerraDrawCircleMode({{ styles: _areaStyles() }}),
                         new td.TerraDrawLineStringMode({{ styles: _lineStyles() }}),
+                        new td.TerraDrawFreehandMode({{ styles: _areaStyles() }}),
                     ],
                 }});
                 drawInstance.start();
@@ -2709,6 +2717,7 @@ async def serve_map(map_id: str, request: Request):
                         drawInstance.updateModeOptions('rectangle', {{ styles: _areaStyles() }});
                         drawInstance.updateModeOptions('circle', {{ styles: _areaStyles() }});
                         drawInstance.updateModeOptions('linestring', {{ styles: _lineStyles() }});
+                        drawInstance.updateModeOptions('freehand', {{ styles: _areaStyles() }});
                     }} catch (e) {{ /* styles refresh is cosmetic */ }}
                 }}).observe(document.documentElement, {{ attributes: true, attributeFilter: ['data-theme'] }});
 
