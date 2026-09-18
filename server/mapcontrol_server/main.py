@@ -1630,8 +1630,65 @@ async def serve_map(map_id: str, request: Request):
             clearHoverHL();
         }});
 
+        // ─── Click selection (issue #111: hover popup → click-to-select) ───
+        // Clicking an asset emphasizes its borders (thicker, fully opaque
+        // stroke in the asset's own color); clicking empty map clears it.
+        // The embedding app pairs this with its own selection card via the
+        // contract's asset_click / map_click events — this block is only the
+        // in-map visual. Original paint values are saved per layer and
+        // restored verbatim on deselect, so custom styles survive.
+        const selection = {{ assetId: null, saved: null }};
+        function deselectAsset() {{
+            if (!selection.assetId) return;
+            if (selection.saved) {{
+                for (const [lid, props] of Object.entries(selection.saved)) {{
+                    if (!map.getLayer(lid)) continue;
+                    for (const [k, v] of Object.entries(props)) {{
+                        try {{ map.setPaintProperty(lid, k, v); }} catch (e) {{}}
+                    }}
+                }}
+            }}
+            selection.assetId = null;
+            selection.saved = null;
+        }}
+        function selectAsset(assetId) {{
+            if (selection.assetId === assetId) return;
+            deselectAsset();
+            const reg = assetRegistry[assetId];
+            if (!reg) return;
+            const saved = {{}};
+            for (const lid of reg.layerIds) {{
+                const layer = map.getLayer(lid);
+                if (!layer || layer.type !== 'line') continue;
+                const w = map.getPaintProperty(lid, 'line-width');
+                saved[lid] = {{
+                    'line-width': w,
+                    'line-opacity': map.getPaintProperty(lid, 'line-opacity'),
+                }};
+                try {{
+                    map.setPaintProperty(lid, 'line-width', (typeof w === 'number' ? w : 2) + 2);
+                    map.setPaintProperty(lid, 'line-opacity', 1);
+                }} catch (e) {{}}
+            }}
+            if (Object.keys(saved).length === 0) return;  // no stroke to emphasize
+            selection.assetId = assetId;
+            selection.saved = saved;
+        }}
+        map.on('click', (e) => {{
+            if (currentDrawMode !== null || deleteMode) return;
+            const layerIds = [];
+            for (const reg of Object.values(assetRegistry)) {{
+                for (const lid of reg.layerIds) if (map.getLayer(lid)) layerIds.push(lid);
+            }}
+            const feats = layerIds.length ? map.queryRenderedFeatures(e.point, {{ layers: layerIds }}) : [];
+            if (!feats.length) {{ deselectAsset(); return; }}
+            for (const [aid, reg] of Object.entries(assetRegistry)) {{
+                if (reg.layerIds.includes(feats[0].layer.id)) {{ selectAsset(aid); return; }}
+            }}
+        }});
+
         // ─── Add GeoJSON to map ───
-        function addGeoJSON(assetId, geojsonStr, style, visible, name, assetType) {{
+        function addGeoJSON(assetId, geojsonStr, style, visible, name, assetType, zIndex) {{
             const geojson = typeof geojsonStr === 'string' ? JSON.parse(geojsonStr) : geojsonStr;
             const srcId = 'src-' + assetId;
             const vis = visible !== false ? 'visible' : 'none';
@@ -1702,7 +1759,8 @@ async def serve_map(map_id: str, request: Request):
             if (labelId) layerIds.push(labelId);
 
             // geojson kept so update_style can rebuild the mask layer later.
-            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson }};
+            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson, zIndex }};
+            applyZPosition(assetId);
 
             // Optional mask (style.mask): darken everything outside the polygon
             if (s.mask && geomTypes.has('fill')) setAssetMask(assetId, s.mask);
@@ -1715,20 +1773,81 @@ async def serve_map(map_id: str, request: Request):
         }}
 
         // ─── Add Image Overlay (GeoTIFF) ───
-        // Find the first vector layer ID (fill/line/circle) so rasters insert below it
+        // Bottom-most vector layer in ACTUAL style order (fill/line/circle of
+        // a user asset), so legacy rasters (no z_index in the payload) insert
+        // below it. Registry-iteration order lied after any reorder.
         function getFirstVectorLayerId() {{
-            for (const [id, reg] of Object.entries(assetRegistry)) {{
-                for (const lid of reg.layerIds) {{
-                    const layer = map.getLayer(lid);
-                    if (layer && (layer.type === 'fill' || layer.type === 'line' || layer.type === 'circle')) {{
-                        return lid;
-                    }}
+            const owned = new Set();
+            for (const reg of Object.values(assetRegistry)) {{
+                for (const lid of reg.layerIds) owned.add(lid);
+            }}
+            const layers = (map.getStyle() || {{}}).layers || [];
+            for (const l of layers) {{
+                if (owned.has(l.id) && (l.type === 'fill' || l.type === 'line' || l.type === 'circle')) {{
+                    return l.id;
                 }}
             }}
             return undefined;  // no vector layers yet
         }}
 
-        async function addImageOverlay(assetId, imageUrl, bounds, opacity, visible, name, assetType) {{
+        // ─── z_index-driven stacking ───
+        // The server's z_index is the canonical order (it's what layer
+        // managers list and what session restore replays). A new asset slots
+        // in below the closest asset with a HIGHER z: return that asset's
+        // bottom-most live layer as the moveLayer/addLayer beforeId, or
+        // undefined to stack on top.
+        function beforeIdForZ(z) {{
+            if (z === undefined || z === null) return undefined;
+            let above = null;
+            for (const reg of Object.values(assetRegistry)) {{
+                if (reg.zIndex === undefined || reg.zIndex === null) continue;
+                if (reg.zIndex > z && (above === null || reg.zIndex < above.zIndex)) above = reg;
+            }}
+            if (!above) return undefined;
+            for (const lid of above.layerIds) {{
+                if (map.getLayer(lid)) return lid;  // layerIds[0] is bottom-most
+            }}
+            return undefined;
+        }}
+
+        // Slot an asset's freshly-added layers into their z position (layers
+        // are appended on top by addLayer; move preserves their internal
+        // fill→line→circle→label order because each insert lands before
+        // beforeId and after the previously moved one).
+        function applyZPosition(assetId) {{
+            const reg = assetRegistry[assetId];
+            if (!reg) return;
+            const beforeId = beforeIdForZ(reg.zIndex);
+            if (!beforeId) return;
+            for (const lid of reg.layerIds) {{
+                if (map.getLayer(lid)) {{
+                    try {{ map.moveLayer(lid, beforeId); }} catch (e) {{}}
+                }}
+            }}
+        }}
+
+        // After a client-side re-stack (move_layer / reorder_assets), refresh
+        // every registry zIndex from the ACTUAL style order so later inserts
+        // compute their slot against reality. (Absolute values don't need to
+        // match the server's — only the relative order does.)
+        function syncRegistryZOrder() {{
+            const layerToAsset = {{}};
+            for (const [aid, reg] of Object.entries(assetRegistry)) {{
+                for (const lid of reg.layerIds) layerToAsset[lid] = aid;
+            }}
+            const layers = (map.getStyle() || {{}}).layers || [];
+            let z = 0;
+            const seen = new Set();
+            for (const l of layers) {{
+                const aid = layerToAsset[l.id];
+                if (aid && !seen.has(aid)) {{
+                    seen.add(aid);
+                    assetRegistry[aid].zIndex = z++;
+                }}
+            }}
+        }}
+
+        async function addImageOverlay(assetId, imageUrl, bounds, opacity, visible, name, assetType, zIndex) {{
             // bounds = [minLon, minLat, maxLon, maxLat]
             const fullUrl = imageUrl.startsWith('http') ? imageUrl : BASE_URL + imageUrl;
             const srcId = 'src-' + assetId;
@@ -1751,15 +1870,18 @@ async def serve_map(map_id: str, request: Request):
                 console.warn('[GeoTIFF] Blob fetch failed, using direct URL:', e.message);
             }}
             map.addSource(srcId, {{ type: 'image', url: imgSrc, coordinates: coords }});
-            // Insert raster below any existing vector layers (vectors always on top)
-            const beforeId = getFirstVectorLayerId();
+            // Slot per the server's canonical z_index; a legacy broadcast
+            // without one falls back to "below all vectors" (the same rule
+            // the server now encodes at creation).
+            const beforeId = (zIndex !== undefined && zIndex !== null)
+                ? beforeIdForZ(zIndex) : getFirstVectorLayerId();
             map.addLayer({{
                 id: layerId, type: 'raster', source: srcId,
                 paint: {{ 'raster-opacity': opacity || 1.0 }},
                 layout: {{ visibility: visible !== false ? 'visible' : 'none' }},
             }}, beforeId);
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
-            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff' }};
+            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex }};
             raiseDrawLayers();
         }}
 
@@ -1818,7 +1940,7 @@ async def serve_map(map_id: str, request: Request):
         // circle/label layers for the endpoint dots. `from`/`to` come from
         // the live add_arc broadcast; on session restore they're recovered
         // from the stored FeatureCollection's Point features.
-        function addArc(assetId, geojsonStr, style, visible, name, from, to, curvature) {{
+        function addArc(assetId, geojsonStr, style, visible, name, from, to, curvature, zIndex) {{
             const gj = typeof geojsonStr === 'string' ? JSON.parse(geojsonStr) : geojsonStr;
             if (!from || !to) {{
                 const pts = (gj.features || []).filter(f => f.geometry && f.geometry.type === 'Point');
@@ -1835,7 +1957,7 @@ async def serve_map(map_id: str, request: Request):
             // mercator). The deck 3D ribbon is layered on top only in
             // mercator mode; syncArcMode() then hides the flat line so the
             // two never double-draw.
-            addGeoJSON(assetId, gj, style, visible, name, 'arc');
+            addGeoJSON(assetId, gj, style, visible, name, 'arc', zIndex);
             if (!deckOverlay || !from || !to) return;
             if (assetRegistry[assetId]) {{
                 assetRegistry[assetId].isDeckArc = true;
@@ -1971,18 +2093,19 @@ async def serve_map(map_id: str, request: Request):
                 // Drawn-shape echo: drop our pending-styled copy first (no-op
                 // for other sessions / agent-created polygons).
                 removePendingDraw(data.client_id);
-                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon');
+                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon', data.z_index);
             }},
-            add_polygon_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon'); }},
-            add_path(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path'); }},
-            add_path_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path'); }},
-            add_point(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'point'); }},
+            add_polygon_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon', data.z_index); }},
+            add_path(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path', data.z_index); }},
+            add_path_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path', data.z_index); }},
+            add_point(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'point', data.z_index); }},
             // Arc: 3D deck.gl ArcLayer (+ MapLibre endpoint dots/labels);
             // falls back to the stored flat LineString if deck is unavailable.
-            add_arc(data) {{ addArc(data.asset_id, data.geojson, data.style, true, data.name, data.from, data.to, data.curvature); }},
+            add_arc(data) {{ addArc(data.asset_id, data.geojson, data.style, true, data.name, data.from, data.to, data.curvature, data.z_index); }},
 
             // ─── Asset management ───
             delete_asset(data) {{
+                if (selection.assetId === data.asset_id) deselectAsset();
                 const reg = assetRegistry[data.asset_id];
                 if (reg) {{
                     for (const lid of reg.layerIds) {{
@@ -2015,6 +2138,10 @@ async def serve_map(map_id: str, request: Request):
                 }}
             }},
             update_style(data) {{
+                // Drop any selection emphasis first: the saved paint values
+                // are about to go stale, and restoring them later would undo
+                // this style change.
+                if (selection.assetId === data.asset_id) deselectAsset();
                 const reg = assetRegistry[data.asset_id];
                 if (reg && data.style) {{
                     const s = data.style;
@@ -2209,10 +2336,10 @@ async def serve_map(map_id: str, request: Request):
 
             // ─── GeoTIFF Handlers ───
             add_geotiff_rgb(data) {{
-                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_rgb');
+                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_rgb', data.z_index);
             }},
             add_geotiff_singleband(data) {{
-                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_singleband');
+                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_singleband', data.z_index);
             }},
 
             // ─── Drawing Control (from SDK/API) ───
@@ -2235,7 +2362,7 @@ async def serve_map(map_id: str, request: Request):
             // ─── Drawn asset from server (add_drawn_polygon) ───
             add_drawn_polygon(data) {{
                 removePendingDraw(data.client_id);
-                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'drawn_polygon');
+                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'drawn_polygon', data.z_index);
             }},
 
             // ─── Draw confirmation (push to undo stack) ───
@@ -2269,8 +2396,10 @@ async def serve_map(map_id: str, request: Request):
                     attribution: data.attribution || '',
                 }});
 
-                // Insert tile layers below vector layers (same as GeoTIFFs)
-                const beforeId = getFirstVectorLayerId();
+                // Slot per canonical z_index (legacy fallback: below vectors,
+                // same as GeoTIFFs)
+                const beforeId = (data.z_index !== undefined && data.z_index !== null)
+                    ? beforeIdForZ(data.z_index) : getFirstVectorLayerId();
                 map.addLayer({{
                     id: layerId,
                     type: 'raster',
@@ -2279,7 +2408,7 @@ async def serve_map(map_id: str, request: Request):
                     layout: {{ visibility: vis }},
                 }}, beforeId);
 
-                assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile' }};
+                assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile', zIndex: data.z_index }};
                 console.log('Added tile layer:', assetId, url, 'opacity:', opacity);
             }},
 
@@ -2364,6 +2493,7 @@ async def serve_map(map_id: str, request: Request):
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
                 raiseDrawLayers();
+                syncRegistryZOrder();
                 console.log('Moved layer:', data.asset_id, position);
             }},
 
@@ -2387,6 +2517,7 @@ async def serve_map(map_id: str, request: Request):
                 // Keep the shared mask beneath the lowest masked asset.
                 if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
                 raiseDrawLayers();
+                syncRegistryZOrder();
                 console.log('Reordered assets (top first):', data.asset_ids);
             }},
         }};
@@ -2473,6 +2604,9 @@ async def serve_map(map_id: str, request: Request):
 
         // ─── Session Restore Handler ───
         function handleSnapshot(snapshot) {{
+            // Selection references layers about to be torn down.
+            selection.assetId = null;
+            selection.saved = null;
             // Clear all existing assets
             for (const [id, reg] of Object.entries(assetRegistry)) {{
                 for (const lid of reg.layerIds) {{
@@ -2494,15 +2628,20 @@ async def serve_map(map_id: str, request: Request):
                     const lons = coords.map(c => c[0]);
                     const lats = coords.map(c => c[1]);
                     const bounds = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
-                    addImageOverlay(asset.asset_id, imageUrl, bounds, 1.0, asset.visible, asset.name, asset.asset_type);
+                    // Snapshot assets arrive bottom-most first (ascending
+                    // z_index) — replaying with each asset's z reproduces the
+                    // persisted stack exactly, INCLUDING user reorders that
+                    // put a raster above vectors (the old below-all-vectors
+                    // heuristic silently undid those on every reconnect).
+                    addImageOverlay(asset.asset_id, imageUrl, bounds, 1.0, asset.visible, asset.name, asset.asset_type, asset.z_index);
                 }} else if (asset.asset_type === 'arc') {{
                     // 3D deck arc: endpoints recovered from the stored
                     // FeatureCollection's Point features inside addArc.
-                    addArc(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name);
+                    addArc(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, undefined, undefined, undefined, asset.z_index);
                 }} else {{
                     // Pass name + type through — losing them on restore left
                     // hover cards and layer managers with unnamed "vector" rows.
-                    addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, asset.asset_type);
+                    addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, asset.asset_type, asset.z_index);
                 }}
             }}
             // Restore basemap — ONLY when it actually differs, and always
@@ -2684,7 +2823,15 @@ async def serve_map(map_id: str, request: Request):
             }}
             // Crosshair while armed (see .draw-mode-active) — the default
             // grab cursor made it unclear the map was ready for sketching.
+            // The class flips synchronously here; any INLINE cursor left by
+            // the hover systems ('pointer') or Terra Draw's adapter must be
+            // cleared too, or it re-surfaces the moment the class comes off
+            // (exit draw mode over empty map showed a stale pointer until
+            // the next hover probe). Note: Chromium only repaints the cursor
+            // on pointer movement — a delayed switch on an idle mouse is a
+            // browser limitation (Firefox repaints immediately).
             map.getCanvas().classList.toggle('draw-mode-active', currentDrawMode !== null);
+            clearHoverHL();
             updateDrawToolbar();
         }}
 
@@ -2746,13 +2893,25 @@ async def serve_map(map_id: str, request: Request):
                 const td = window.terraDraw;
                 const tda = window.terraDrawMaplibreGlAdapter;
                 drawInstance = new td.TerraDraw({{
-                    adapter: new tda.TerraDrawMapLibreGLAdapter({{ map }}),
+                    // minPixelDragDistance: before a shape is started the
+                    // adapter's default is 1px — ANY pointer jitter between
+                    // press and release reclassified the click as a "drag",
+                    // which click-driven modes ignore. That was the "first
+                    // click on the map does nothing" bug (later clicks used
+                    // the separate 8px while-drawing default and landed).
+                    // 8px matches the while-drawing threshold.
+                    adapter: new tda.TerraDrawMapLibreGLAdapter({{ map, minPixelDragDistance: 8 }}),
+                    // click-move-or-drag: two-point shapes (and freehand)
+                    // accept BOTH gestures — click, move, click again; or
+                    // press, drag, release. Polygon/linestring stay
+                    // click-per-vertex (Terra Draw has no drag variant for
+                    // them; freehand IS the drag way to sketch a polygon).
                     modes: [
                         new td.TerraDrawPolygonMode({{ styles: _areaStyles() }}),
-                        new td.TerraDrawRectangleMode({{ styles: _areaStyles() }}),
-                        new td.TerraDrawCircleMode({{ styles: _areaStyles() }}),
+                        new td.TerraDrawRectangleMode({{ styles: _areaStyles(), drawInteraction: 'click-move-or-drag' }}),
+                        new td.TerraDrawCircleMode({{ styles: _areaStyles(), drawInteraction: 'click-move-or-drag' }}),
                         new td.TerraDrawLineStringMode({{ styles: _lineStyles() }}),
-                        new td.TerraDrawFreehandMode({{ styles: _areaStyles() }}),
+                        new td.TerraDrawFreehandMode({{ styles: _areaStyles(), drawInteraction: 'click-move-or-drag' }}),
                     ],
                 }});
                 drawInstance.start();
@@ -2774,8 +2933,10 @@ async def serve_map(map_id: str, request: Request):
                 // A completed shape: render the dashed pending copy RIGHT NOW,
                 // hand the geometry to the server (echo returns the confirmed
                 // green asset), and clear it from Terra Draw's store — the
-                // asset pipeline owns it from here. The draw mode STAYS active
-                // so consecutive shapes need no re-click.
+                // asset pipeline owns it from here. Finishing a shape then
+                // reverts to pan mode (issue #111): draw-another means
+                // re-clicking the tool, which beats the stuck-in-draw-mode
+                // surprise the old always-armed behavior caused.
                 drawInstance.on('finish', function(id, context) {{
                     if (context && context.action && context.action !== 'draw') return;
                     const feature = drawInstance.getSnapshot().find(f => f.id === id);
@@ -2811,6 +2972,7 @@ async def serve_map(map_id: str, request: Request):
                     }}
 
                     try {{ drawInstance.removeFeatures([id]); }} catch (e) {{}}
+                    activatePanMode();
                 }});
 
                 if (!UI_NAKED) map.addControl(new DrawToolbarControl(), 'top-left');
@@ -2875,7 +3037,9 @@ async def serve_map(map_id: str, request: Request):
             }}
             currentDrawMode = null;
             deleteMode = true;
+            map.getCanvas().classList.remove('draw-mode-active');
             map.getCanvas().classList.add('delete-mode-active');
+            clearHoverHL();
             map.on('click', onDeleteClick);
             updateDrawToolbar();
         }}
@@ -2883,6 +3047,7 @@ async def serve_map(map_id: str, request: Request):
         function exitDeleteMode() {{
             deleteMode = false;
             map.getCanvas().classList.remove('delete-mode-active');
+            clearHoverHL();
             map.off('click', onDeleteClick);
             updateDrawToolbar();
         }}

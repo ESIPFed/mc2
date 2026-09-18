@@ -139,8 +139,10 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
             animated=event.data.get("animated", False),
         )
         asset_id = asset.asset_id
-        # Enrich the broadcast data with the assigned asset_id
+        # Enrich the broadcast with the assigned asset_id and canonical
+        # stacking slot (clients insert by z_index, not arrival order).
         event.data["asset_id"] = asset_id
+        event.data["z_index"] = asset.z_index
 
     elif event.type == "add_arc":
         # Arc glyph: server tessellates a great-circle LineString between two
@@ -192,6 +194,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         asset_id = asset.asset_id
         # Enrich broadcast so the frontend can render without re-tessellating
         event.data["asset_id"] = asset_id
+        event.data["z_index"] = asset.z_index
         event.data["geojson"] = arc_geojson
         event.data["name"] = arc_name
         if style is not None:
@@ -217,6 +220,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         asset_id = asset.asset_id
         # Send the resolved geojson to the frontend
         event.data["asset_id"] = asset_id
+        event.data["z_index"] = asset.z_index
         event.data["geojson"] = asset.geojson
 
     elif event.type == "delete_asset":
@@ -235,6 +239,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         )
         asset_id = asset.asset_id
         event.data["asset_id"] = asset_id
+        event.data["z_index"] = asset.z_index
 
     elif event.type == "remove_tile_layer":
         target_id = event.data.get("asset_id")
@@ -256,6 +261,14 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
                 error="reorder_assets requires a non-empty 'asset_ids' list (topmost first)",
             )
         await asset_service.reorder_assets(map_id, ids)
+
+    elif event.type == "move_layer":
+        # Persist the move so DB z_index stays canonical (the live map
+        # applies the same move via its broadcast handler).
+        target_id = event.data.get("asset_id")
+        position = event.data.get("position")
+        if target_id and position:
+            await asset_service.move_asset(map_id, target_id, position)
 
     elif event.type == "set_visibility":
         target_id = event.data.get("asset_id")
@@ -375,6 +388,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
                 "event_id": event_id,
                 "data": {
                     "asset_id": asset.asset_id,
+                    "z_index": asset.z_index,
                     "geojson": item.get("geojson", ""),
                     **({"style": item["style"]} if "style" in item else {}),
                     **({"name": item["name"]} if "name" in item else {}),
@@ -457,6 +471,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
 
         # Enrich event data for broadcast
         event.data["asset_id"] = asset_id
+        event.data["z_index"] = asset.z_index
         event.data["image_url"] = result.image_url
         event.data["bounds"] = result.bounds
         event.data["width"] = result.width

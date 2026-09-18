@@ -40,13 +40,36 @@ async def create_asset(
     metadata_json = metadata.model_dump_json() if metadata else None
     bbox = _compute_bbox(geojson)
 
-    # New assets stack on top: z_index = current max + 1 for this map.
-    cursor = await db.execute(
-        "SELECT COALESCE(MAX(z_index), -1) + 1 FROM assets WHERE map_id = ?",
-        (map_id,),
-    )
-    row = await cursor.fetchone()
-    z_index = row[0] if row else 0
+    # Stacking policy, encoded HERE so the DB z_index is canonical and every
+    # consumer (live map, layer managers, session restore) sees the same
+    # order. Vectors stack on top (max + 1). Rasters (geotiffs/tiles) slot in
+    # just BELOW the lowest vector — a full-extent raster added on top would
+    # bury every polygon — by shifting everything at or above that slot up
+    # one. Explicit user reorders are respected afterwards: this only picks
+    # the INITIAL slot.
+    is_raster = asset_type.startswith("geotiff") or asset_type == "tile_layer"
+    min_vector_z = None
+    if is_raster:
+        cursor = await db.execute(
+            "SELECT MIN(z_index) FROM assets WHERE map_id = ? "
+            "AND asset_type NOT LIKE 'geotiff%' AND asset_type != 'tile_layer'",
+            (map_id,),
+        )
+        row = await cursor.fetchone()
+        min_vector_z = row[0] if row else None
+    if min_vector_z is not None:
+        await db.execute(
+            "UPDATE assets SET z_index = z_index + 1 WHERE map_id = ? AND z_index >= ?",
+            (map_id, min_vector_z),
+        )
+        z_index = min_vector_z
+    else:
+        cursor = await db.execute(
+            "SELECT COALESCE(MAX(z_index), -1) + 1 FROM assets WHERE map_id = ?",
+            (map_id,),
+        )
+        row = await cursor.fetchone()
+        z_index = row[0] if row else 0
 
     await db.execute(
         """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, bbox, created_at, updated_at)
@@ -208,6 +231,42 @@ async def reorder_assets(map_id: str, asset_ids: list[str]) -> None:
         await db.execute(
             "UPDATE assets SET z_index = ?, updated_at = ? WHERE id = ? AND map_id = ?",
             (n - i, now, aid, map_id),
+        )
+    await db.commit()
+
+
+async def move_asset(map_id: str, asset_id: str, position: str) -> None:
+    """Persist a single-asset move ('top' | 'bottom' | 'up' | 'down').
+
+    Mirrors the live map's move_layer handling so the stored order survives
+    reloads — move_layer used to be broadcast-only, and the next snapshot or
+    layer-manager poll silently snapped the stack back.
+    """
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
+        (map_id,),
+    )
+    order = [row["id"] for row in await cursor.fetchall()]
+    if asset_id not in order:
+        return
+    idx = order.index(asset_id)
+    order.pop(idx)
+    if position == "top":
+        order.append(asset_id)
+    elif position == "bottom":
+        order.insert(0, asset_id)
+    elif position == "up":
+        order.insert(min(idx + 1, len(order)), asset_id)
+    elif position == "down":
+        order.insert(max(idx - 1, 0), asset_id)
+    else:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for z, aid in enumerate(order):
+        await db.execute(
+            "UPDATE assets SET z_index = ?, updated_at = ? WHERE id = ? AND map_id = ?",
+            (z, now, aid, map_id),
         )
     await db.commit()
 
