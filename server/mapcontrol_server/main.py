@@ -998,6 +998,17 @@ async def serve_map(map_id: str, request: Request):
             center: DEFAULTS.center,
             zoom: DEFAULTS.zoom,
             preserveDrawingBuffer: true,
+            // Default cache is sized to the current viewport, so panning
+            // back over a just-visited area re-fetches and re-fades tiles.
+            // 512 tiles/source (~tens of MB) keeps a session's working set
+            // hot — revisits render instantly instead of flashing blanks.
+            maxTileCacheSize: 512,
+            // Default (true) abandons in-flight tile requests mid-zoom, so
+            // a zoom gesture ends on blank chunks that then restart from
+            // zero. Keeping the requests alive costs some now-stale-zoom
+            // bandwidth — accepted tradeoff, bandwidth is not our
+            // bottleneck — and fills the end-of-zoom frame much sooner.
+            cancelPendingTileRequestsWhileZooming: false,
         }};
         // Server-resolved initial camera: when the map has a persisted or
         // inherited bbox viewport, start FITTED to it so the very first tiles
