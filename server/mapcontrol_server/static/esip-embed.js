@@ -295,14 +295,8 @@
     els.layersPanel = layersPanel;
     els.settingsPanel = settingsPanel;
 
-    // Hover card
-    var card = el("div", "esip-hovercard");
-    card.hidden = true;
-    els.card = card;
-
     document.body.appendChild(gear);
     document.body.appendChild(panel);
-    document.body.appendChild(card);
 
     renderSettings();
   }
@@ -473,7 +467,7 @@
     // *navigating away from* the chrome, not by hiding it in place.
     p.appendChild(mkSetting(
       "Default UI",
-      "Show the built-in layer panel & hover cards. Turn off for a bare map.",
+      "Show the built-in layer panel. Turn off for a bare map.",
       true,
       function (on) {
         var u = new URL(window.location.href);
@@ -508,65 +502,14 @@
     return wrap;
   }
 
-  // ─── Hover card (peek) ──────────────────────────────────────────────────
-  var hideTimer = null;
-  function showCard(detail) {
-    var asset = assetById[detail.asset_id];
-    // If the asset isn't in our cache yet (race), synthesize a minimal model
-    // from the hover payload so the card is still useful.
-    var model = asset ? cardModel(asset) : {
-      name: detail.name || "Untitled",
-      type: prettyType(detail.asset_type),
-      thumb: null, swatch: null, icon: iconForType(detail.asset_type), md: "", stat: "",
-    };
-    var card = els.card;
-    clear(card);
-
-    var visual = el("div", "esip-hovercard-visual");
-    if (model.thumb) visual.style.backgroundImage = 'url("' + model.thumb + '")';
-    else if (model.swatch) visual.style.background = model.swatch;
-    else visual.innerHTML = model.icon;
-    card.appendChild(visual);
-
-    var body = el("div", "esip-hovercard-body");
-    body.appendChild(el("div", "esip-hovercard-type", esc(model.type)));
-    body.appendChild(el("div", "esip-hovercard-title", esc(model.name)));
-    if (model.stat) body.appendChild(el("div", "esip-hovercard-stat", esc(model.stat)));
-    if (model.md) body.appendChild(el("div", "esip-hovercard-desc", miniMarkdown(model.md)));
-    card.appendChild(body);
-
-    positionCard(detail.point);
-    card.hidden = false;
-    // next frame → fade in
-    requestAnimationFrame(function () { card.classList.add("esip-show"); });
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-  }
-
-  function positionCard(point) {
-    var card = els.card;
-    var x = (point && point.x != null) ? point.x : 20;
-    var y = (point && point.y != null) ? point.y : 20;
-    // Default: below-right of cursor; flip if near the viewport edge.
-    card.style.left = "0px"; card.style.top = "0px";
-    var w = 280, h = 100;
-    var left = x + 16, top = y + 16;
-    if (left + w > window.innerWidth) left = x - w - 16;
-    if (top + h > window.innerHeight) top = y - h - 16;
-    card.style.left = Math.max(8, left) + "px";
-    card.style.top = Math.max(8, top) + "px";
-  }
-
-  function hideCard() {
-    var card = els.card;
-    card.classList.remove("esip-show");
-    hideTimer = setTimeout(function () { card.hidden = true; }, 120);
-  }
-
   // ─── Wire the public contract events ────────────────────────────────────
+  // Hover deliberately shows NOTHING (issue #111): the old hover card pinned
+  // itself at the position where the hover began, and when zoomed inside a
+  // large polygon it could never be dismissed. Selection is a CLICK now —
+  // the map emphasizes the clicked asset's border, and the click below
+  // focuses its row (with opacity/style controls) in the panel.
   function wire() {
     window.addEventListener("esip:assetschanged", function () { refreshAssets(); });
-    window.addEventListener("esip:asset_hover", function (e) { showCard(e.detail || {}); });
-    window.addEventListener("esip:asset_hover_end", function () { hideCard(); });
     window.addEventListener("esip:asset_click", function (e) {
       var d = e.detail || {};
       if (!d.asset_id) return;
