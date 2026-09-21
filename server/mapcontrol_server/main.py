@@ -227,8 +227,16 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                 # accent (--eo-accent #7cc242, darker #5fa830 stroke) so
                 # user-drawn shapes read as part of the product, distinct
                 # from agent-added analysis layers.
+                #
+                # The fill carries its translucency IN the color (8-digit
+                # hex, 0x80 = 50%) rather than relying on the fill layer's
+                # baked-in base fill-opacity: agent-added polygons already
+                # follow this convention (e.g. #3388ff20), and the EoGPT
+                # layer drawer's alpha slider seeds from the color's alpha
+                # byte — a 6-digit fill reads as 100% there while rendering
+                # translucent, which is exactly the mismatch this avoids.
                 style = AssetStyle(
-                    fill_color="#7cc242",
+                    fill_color="#7cc24280",
                     stroke_color="#5fa830",
                     stroke_width=2.0,
                 )
