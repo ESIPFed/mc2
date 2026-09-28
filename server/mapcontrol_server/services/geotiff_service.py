@@ -26,6 +26,7 @@ from typing import Any
 import httpx
 import numpy as np
 import rasterio
+from rasterio.enums import MaskFlags
 from rasterio.warp import transform_bounds
 from matplotlib import colormaps
 from PIL import Image
@@ -206,6 +207,23 @@ def _bounds_to_geojson_polygon(bounds: list[float]) -> dict:
     }
 
 
+# ─── Masking ────────────────────────────────────────────────────────────────
+
+
+def _file_mask_invalid(ds: Any, bands: list[int]) -> np.ndarray | None:
+    """Pixels the file's own mask band or alpha band marks as empty.
+
+    Nodata tags are handled by the callers (so a nodata override still
+    replaces the tag); this only covers per-dataset masks and alpha bands,
+    which GIS tools and eo-gpt's display writers use. Returns None when the
+    selected bands carry neither.
+    """
+    flags = [ds.mask_flag_enums[b - 1] for b in bands]
+    if not any(MaskFlags.per_dataset in f or MaskFlags.alpha in f for f in flags):
+        return None
+    return (ds.read_masks(bands) == 0).all(axis=0)
+
+
 # ─── RGB Processing ─────────────────────────────────────────────────────────
 
 
@@ -235,17 +253,21 @@ def _process_rgb(
     g = ds.read(bands[1]).astype(np.float64)
     b_arr = ds.read(bands[2]).astype(np.float64)
 
-    # Determine nodata mask
+    # Determine nodata mask. A fill value fills every band, so a pixel is
+    # nodata only when ALL three bands equal it; one band that happens to
+    # equal it (pure red, deep shadow) is data.
     nodata = nodata_override if nodata_override is not None else ds.nodata
     mask = np.zeros(r.shape, dtype=bool)
     if nodata is not None:
-        mask |= r == nodata
-        mask |= g == nodata
-        mask |= b_arr == nodata
-    # Also mask NaN
+        mask |= (r == nodata) & (g == nodata) & (b_arr == nodata)
+    # A pixel with NaN in any band has no color to draw
     mask |= np.isnan(r)
     mask |= np.isnan(g)
     mask |= np.isnan(b_arr)
+    # Honor the file's own mask / alpha band
+    file_invalid = _file_mask_invalid(ds, bands)
+    if file_invalid is not None:
+        mask |= file_invalid
 
     # Normalize each band to 0-255 using percentile-based histogram stretch
     # This prevents bright outliers (clouds, sun glint) from crushing the rest to black
@@ -259,6 +281,9 @@ def _process_rgb(
         if p_high == p_low:
             p_high = p_low + 1.0
         normalized = (arr - p_low) / (p_high - p_low) * 255.0
+        # Masked pixels (possibly NaN) are hidden by alpha; zero them so
+        # NaN never reaches the integer cast.
+        normalized[m] = 0.0
         return np.clip(normalized, 0, 255).astype(np.uint8)
 
     r_u8 = normalize_band(r, mask)
@@ -303,6 +328,9 @@ def _process_singleband(
     mask = np.isnan(data)
     if nodata is not None:
         mask |= data == nodata
+    file_invalid = _file_mask_invalid(ds, [band])
+    if file_invalid is not None:
+        mask |= file_invalid
 
     # Get valid data for statistics
     valid = data[~mask]
