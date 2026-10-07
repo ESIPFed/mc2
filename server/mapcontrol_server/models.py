@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from pydantic import BaseModel, Field, model_validator
+from typing import Any, Literal
+from urllib.parse import urlsplit
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ─── Style ───────────────────────────────────────────────────────────────────
@@ -121,10 +122,57 @@ class AssetStyle(BaseModel):
 
 # ─── Asset Metadata ──────────────────────────────────────────────────────────
 
+class InspectorAttachment(BaseModel):
+    """A reference to content rendered by the generic map inspector."""
+
+    type: Literal["html", "image", "link"]
+    url: str
+    title: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _safe_url(cls, value: str) -> str:
+        # Keep the original string intact (signed URLs may be sensitive to
+        # normalization). Relative references resolve against the map page.
+        if not value or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("Attachment URL must be a non-empty HTTP(S) or relative URL")
+        try:
+            parsed = urlsplit(value)
+            # Accessing these properties also checks malformed IPv6/ports.
+            hostname, _port = parsed.hostname, parsed.port
+        except ValueError:
+            raise ValueError("Attachment URL is malformed") from None
+        if parsed.scheme.lower() not in ("", "http", "https"):
+            raise ValueError("Attachment URL must use HTTP(S) or be relative")
+        if parsed.scheme and not hostname:
+            raise ValueError("HTTP(S) attachment URLs must include a host")
+        if parsed.username or parsed.password or "\\" in value:
+            raise ValueError("Attachment URLs must not contain credentials or backslashes")
+        return value
+
+
+class AssetInspector(BaseModel):
+    """Versioned, domain-independent convention for metadata.extra.inspector."""
+
+    version: Literal[1] = 1
+    status: Literal["loading", "ready", "empty", "error"] | None = None
+    attachments: list[InspectorAttachment] = Field(default_factory=list)
+
+
 class AssetMetadata(BaseModel):
     title: str | None = None
     description: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("extra")
+    @classmethod
+    def _validate_inspector(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if value.get("inspector") is not None:
+            inspector = AssetInspector.model_validate(value["inspector"])
+            # Stored metadata and live messages share the same complete v1
+            # descriptor even when callers omit version or attachments.
+            return {**value, "inspector": inspector.model_dump(exclude_none=True)}
+        return value
 
 
 # ─── Map ─────────────────────────────────────────────────────────────────────

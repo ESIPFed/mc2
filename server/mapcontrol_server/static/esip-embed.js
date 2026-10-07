@@ -512,7 +512,7 @@
     window.addEventListener("esip:assetschanged", function () { refreshAssets(); });
     window.addEventListener("esip:asset_click", function (e) {
       var d = e.detail || {};
-      if (!d.asset_id) return;
+      if (!d.asset_id || d.inspector_handled) return;
       // Click = focus in the panel (no modal): open panel, switch to Layers,
       // expand + scroll to the row.
       togglePanel(true);

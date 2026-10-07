@@ -276,7 +276,6 @@ async def update_asset(
 ) -> AssetResponse | None:
     """Partially update an asset."""
     db = await get_db()
-    now = datetime.now(timezone.utc).isoformat()
 
     # Build SET clause dynamically
     updates = []
@@ -288,9 +287,6 @@ async def update_asset(
     if update.style is not None:
         updates.append("style = ?")
         params.append(update.style.model_dump_json())
-    if update.metadata is not None:
-        updates.append("metadata = ?")
-        params.append(update.metadata.model_dump_json())
     if update.visible is not None:
         updates.append("visible = ?")
         params.append(int(update.visible))
@@ -298,18 +294,51 @@ async def update_asset(
         updates.append("animated = ?")
         params.append(int(update.animated))
 
-    if not updates:
+    if not updates and update.metadata is None:
         return await get_asset(map_id, asset_id)
 
-    updates.append("updated_at = ?")
-    params.append(now)
-    params.extend([asset_id, map_id])
+    while True:
+        set_parts = list(updates)
+        values = list(params)
+        metadata_before = None
+        if update.metadata is not None:
+            # Read only metadata, not potentially multi-MB geometry. Each
+            # extra key is a namespace replaced as a whole. Guard the write
+            # with the exact stored JSON so concurrent metadata edits retry
+            # against the newest value instead of losing unrelated fields.
+            cursor = await db.execute(
+                "SELECT metadata FROM assets WHERE id = ? AND map_id = ?",
+                (asset_id, map_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            metadata_before = row["metadata"]
+            metadata = json.loads(metadata_before) if metadata_before else {}
+            patch = update.metadata.model_dump(exclude_unset=True)
+            if "extra" in patch:
+                patch["extra"] = {**metadata.get("extra", {}), **patch["extra"]}
+            metadata.update(patch)
+            set_parts.append("metadata = ?")
+            values.append(AssetMetadata.model_validate(metadata).model_dump_json())
 
-    set_clause = ", ".join(updates)
-    await db.execute(
-        f"UPDATE assets SET {set_clause} WHERE id = ? AND map_id = ?", params
-    )
-    await db.commit()
+        set_parts.append("updated_at = ?")
+        values.append(datetime.now(timezone.utc).isoformat())
+        values.extend([asset_id, map_id])
+        where = "id = ? AND map_id = ?"
+        if update.metadata is not None:
+            # IS compares both SQL NULL and text, including legacy rows whose
+            # metadata has not been written yet. No global/per-map lock needed.
+            where += " AND metadata IS ?"
+            values.append(metadata_before)
+        cursor = await db.execute(
+            f"UPDATE assets SET {', '.join(set_parts)} WHERE {where}", values
+        )
+        await db.commit()
+        if update.metadata is None or cursor.rowcount:
+            break
+        # The row changed (or was deleted) between SELECT and UPDATE. Re-read
+        # it and merge again; deletion returns None at the top of the loop.
 
     return await get_asset(map_id, asset_id)
 

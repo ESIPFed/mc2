@@ -103,9 +103,9 @@ class Metadata:
 
     def to_dict(self) -> dict:
         d = {}
-        if self.title:
+        if self.title is not None:
             d["title"] = self.title
-        if self.description:
+        if self.description is not None:
             d["description"] = self.description
         if self.extra:
             d["extra"] = self.extra
