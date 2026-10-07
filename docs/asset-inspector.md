@@ -1,8 +1,8 @@
 # Asset inspector
 
 MC2's inspector displays content associated with an ordinary geographic asset.
-The application supplies the content; MC2 owns selection, geographic anchoring,
-presentation, and dismissal. No station or analysis-specific asset type is needed.
+The application supplies the content; MC2 owns hover previews, pinned callouts,
+geographic connectors, and dismissal. No station or analysis-specific asset type is needed.
 
 Opt an asset in through `metadata.extra.inspector`:
 
@@ -34,7 +34,9 @@ free of credentials, whitespace, control characters, and backslashes. Content mu
 accessible to the viewer's browser. Applications remain responsible for artifact
 hosting, access, link lifetimes, and refreshing expired references.
 
-Titles and descriptions are plain text. HTML content is a URL reference and
+Titles and descriptions remain plain-text metadata. The compact callout shows
+one asset title and the attachments; it does not repeat attachment headings or
+display the description. HTML content is a URL reference and
 is rendered in a sandboxed iframe; supplied markup is never inserted into MC2's
 DOM. There is no additional `inspectable` flag. Setting the inspector to `null`
 disables the inspector for that asset.
@@ -80,36 +82,53 @@ The inspector is enabled with `ui=default`. Embedders using `ui=controls` or
 For example, `/map/{map_id}?ui=controls&inspect=1` keeps the native navigation and
 drawing controls while allowing inspection without the built-in layer panel.
 
-Clicking an enabled asset opens one MapLibre popup. Points anchor at their exact
-geometry; other geometries anchor at the clicked location. The popup follows
-map movements, and Expand gives a larger view within the map. Small map frames
-use a bottom sheet. Clicking another enabled asset replaces the content;
-background clicks, ordinary asset clicks, Close, and Escape dismiss it.
-Drawing/deleting mode suppresses inspection. Hidden or deleted selections close.
-Selection and expansion are local to the viewer and never sent as map events.
+Hovering over an enabled asset briefly shows a compact, read-only preview.
+Moving away hides that preview. Clicking pins the callout and enables interaction
+with its attachments. Several callouts can be pinned for comparison; repeated
+clicks on the same asset bring its existing callout forward. Within a multi-feature
+asset, a new click reanchors that asset's existing callout.
+
+Drag a pinned callout by its header to reposition it. Pinned callouts stay in
+place on the screen while panning or zooming. Thin connectors track their original
+map locations: exact point geometry for points and the inspected location for
+other geometries. Resizing the map keeps the cards within its bounds.
+
+Background clicks and clicks outside an embedded map hide only the hover preview.
+Close dismisses its callout; Escape dismisses the preview or the active pinned
+callout. Drawing/deleting mode suppresses inspection. Hidden or deleted assets
+lose their callouts. Pinning, dragging, and dismissal are local to the viewer and
+never sent as map events.
 
 The ordinary `asset_click` event includes `inspector_handled: true` when MC2
 opened the inspector, and `false` otherwise. An embedding app should suppress its
 own selection card/layer drawer when this is true. The event also includes the
 rendered `feature_id` when available; generated feature IDs are local to the
 current asset geometry and should not be used as durable artifact identities.
+The `asset_hover` event also includes `inspector_handled` so custom hover UIs can
+yield to the native preview.
 
-HTML attachments execute only in an `allow-scripts` iframe sandbox, without
+Producers should supply compact, responsive attachments with their own chart
+controls and layout appropriate to a small frame. MC2 does not modify attachment
+URLs or strip content from third-party charts. HTML attachments execute only in
+an `allow-scripts` iframe sandbox, without
 same-origin access to MC2. For CORS-readable documents, MC2 adds a sandboxed
 Escape-key bridge; documents that cannot be fetched through CORS load directly
 in the same sandbox. In that fallback, Close remains available outside the
 frame and Escape works when focus is on MC2. Attachment links open separately.
 
-An embedder can close inspection when focus/click moves outside its map iframe:
+An embedder can hide the transient preview when a click moves outside its map iframe:
 
 ```javascript
 mapIframe.contentWindow.postMessage({
   source: 'esip-embedder',
   type: 'close_inspector',
   map_id: mapId,
+  reason: 'outside',
 }, new URL(mapIframe.src).origin);
 ```
 
+Use `reason: 'escape'` to dismiss the active callout on an Escape keypress in the
+parent application. Omitting the reason has the same behavior as `outside`.
 MC2 accepts that message only from its parent window with a matching map ID and,
 when supplied by the browser, a matching referrer origin. Same-document consumers
-can call `window.ESIPMap.inspector?.close()`.
+can call `window.ESIPMap.inspector?.close()` to close all previews and pins.
