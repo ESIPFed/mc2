@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..models import AssetResponse, AssetUpdate
 from ..services import asset_service, session_service
+from ..websocket import manager
 
 router = APIRouter(prefix="/api/maps/{map_id}/assets", tags=["assets"])
 
@@ -41,6 +42,10 @@ async def update_asset(map_id: str, asset_id: str, update: AssetUpdate):
     asset = await asset_service.update_asset(map_id, asset_id, update)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
+    await manager.broadcast_to_map(map_id, {
+        "type": "asset_updated",
+        "data": asset.model_dump(),
+    })
     return asset
 
 
@@ -50,3 +55,7 @@ async def delete_asset(map_id: str, asset_id: str):
     deleted = await asset_service.delete_asset(map_id, asset_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Asset not found")
+    await manager.broadcast_to_map(map_id, {
+        "type": "delete_asset",
+        "data": {"asset_id": asset_id},
+    })

@@ -130,13 +130,21 @@
     // Additive: this does not interfere with the map's own delete-mode click
     // handler; it only emits an event the embedder may act on.
     map.on("click", function (e) {
+      if (typeof internals.isDrawing === "function" && internals.isDrawing()) return;
       var ids = assetLayerIds();
       var feats = ids.length ? map.queryRenderedFeatures(e.point, { layers: ids }) : [];
       if (feats.length) {
         var aid = assetForLayer(feats[0].layer.id);
         if (aid) {
+          var inspector = window.ESIPMap && window.ESIPMap.inspector;
+          var handled = !!(inspector && inspector.claimClick({
+            asset_id: aid, feature: feats[0], point: e.point,
+            lngLat: [e.lngLat.lng, e.lngLat.lat],
+          }));
           emit("asset_click", {
             asset_id: aid,
+            feature_id: feats[0].id == null ? null : feats[0].id,
+            inspector_handled: handled,
             point: { x: e.point.x, y: e.point.y },
             lngLat: [e.lngLat.lng, e.lngLat.lat],
           });
@@ -155,6 +163,11 @@
       var orig = handlers[name];
       if (typeof orig !== "function") return;
       handlers[name] = function (data) {
+        if (data && data.asset_id && internals.rememberAsset) {
+          if (name === "delete_asset" || name === "remove_tile_layer") {
+            delete internals.assetInfo[data.asset_id];
+          } else internals.rememberAsset(data);
+        }
         var r = orig.apply(this, arguments);
         try { after(data); } catch (e) { /* keep map resilient */ }
         return r;
@@ -165,17 +178,17 @@
       "add_arc",
       "add_geotiff_rgb", "add_geotiff_singleband", "add_tile_layer",
       "add_drawn_polygon", "delete_asset", "remove_tile_layer",
-      "update_style", "set_opacity", "move_layer",
+      "update_style", "set_opacity", "move_layer", "update_metadata", "asset_updated",
     ];
     CHANGE_EVENTS.forEach(function (name) {
-      decorate(name, function () {
-        window.dispatchEvent(new CustomEvent("esip:assetschanged"));
+      decorate(name, function (data) {
+        emit("assetschanged", { type: name, asset_id: data && data.asset_id });
       });
     });
     decorate("set_visibility", function (data) {
       var reg = registry[data.asset_id];
       if (reg) reg.visible = data.visible !== false;
-      window.dispatchEvent(new CustomEvent("esip:assetschanged"));
+      emit("assetschanged", { type: "set_visibility", asset_id: data.asset_id });
     });
 
     // ─── REST command surface (dogfoods the public events API) ────────────
@@ -197,6 +210,7 @@
       getBasemaps: function () { return basemaps || {}; },
       getCurrentBasemap: internals.getCurrentBasemap,
       getRegistry: function () { return registry; },
+      getAssetInfo: function (id) { return internals.assetInfo[id] || null; },
       actions: {
         setVisibility: function (assetId, visible) { return postEvent("set_visibility", { asset_id: assetId, visible: visible }); },
         deleteAsset: function (assetId) { return postEvent("delete_asset", { asset_id: assetId }); },

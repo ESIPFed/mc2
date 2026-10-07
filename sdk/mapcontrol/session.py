@@ -422,6 +422,17 @@ class MapSession:
         style_dict = style.to_dict() if isinstance(style, Style) else style
         return self._send_event("update_style", {"asset_id": asset_id, "style": style_dict})
 
+    def update_metadata(self, asset_id: str, metadata: Metadata | dict) -> EventResult:
+        """Merge metadata and notify live viewers without recreating the asset.
+
+        Supplied title/description replace those fields. ``extra`` is merged
+        by key; each namespace (including ``inspector``) is replaced in full.
+        Pass a dict with explicit null title/description to clear text, or
+        ``{"extra": {"inspector": None}}`` to remove the inspector.
+        """
+        metadata_dict = metadata.to_dict() if isinstance(metadata, Metadata) else metadata
+        return self._send_event("update_metadata", {"asset_id": asset_id, "metadata": metadata_dict})
+
     # ─── Tile Layers ─────────────────────────────────────────────────────────
 
     def add_tile_layer(

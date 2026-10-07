@@ -419,6 +419,10 @@ async def serve_map(map_id: str, request: Request):
         ui = "none"
 
 
+    # Inspection is part of the default UI, independently opt-in for embeds.
+    inspect_param = request.query_params.get("inspect")
+    inspect_enabled = inspect_param == "1" or (ui == "default" and inspect_param != "0")
+
     # Reverse-proxy mount prefix (ADR-0001 dual-deployability). When ESIP runs
     # behind a single-origin proxy under a sub-path (MAPCONTROL_ROOT_PATH →
     # uvicorn --root-path), Starlette puts that prefix on request.scope.
@@ -439,6 +443,9 @@ async def serve_map(map_id: str, request: Request):
         if ui == "default" else ""
     )
     ui_body = f'<script src="{root_path}/static/esip-contract.js"></script>'
+    if inspect_enabled:
+        ui_head += f'<link rel="stylesheet" href="{root_path}/static/esip-inspector.css">'
+        ui_body += f'<script src="{root_path}/static/esip-inspector.js"></script>'
     if ui == "default":
         ui_body += f'<script src="{root_path}/static/esip-embed.js"></script>'
 
@@ -773,6 +780,19 @@ async def serve_map(map_id: str, request: Request):
         // ─── Asset Registry ───
         // Tracks layer IDs and GeoJSON bounds for each asset
         const assetRegistry = {{}};  // asset_id -> {{ layerIds, bounds, srcId }}
+        // Persisted presentation data, available synchronously on clicks even
+        // while an image overlay is still loading. Snapshot + live events own it.
+        const assetInfo = {{}};  // asset_id -> asset metadata/name/visibility
+        function rememberAsset(data) {{
+            if (!data || !data.asset_id) return;
+            assetInfo[data.asset_id] = {{ ...(assetInfo[data.asset_id] || {{}}), ...data }};
+            const reg = assetRegistry[data.asset_id];
+            if (reg) {{
+                for (const key of ['metadata', 'name', 'visible']) {{
+                    if (key in data) reg[key] = data[key];
+                }}
+            }}
+        }}
 
         let currentBasemap = DEFAULTS.basemap;
         let currentTerrain = DEFAULTS.terrain || '2d';  // '2d' or '3d'
@@ -1778,7 +1798,7 @@ async def serve_map(map_id: str, request: Request):
             if (labelId) layerIds.push(labelId);
 
             // geojson kept so update_style can rebuild the mask layer later.
-            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson, zIndex }};
+            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson, zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata }};
             applyZPosition(assetId);
 
             // Optional mask (style.mask): darken everything outside the polygon
@@ -1900,7 +1920,7 @@ async def serve_map(map_id: str, request: Request):
                 layout: {{ visibility: visible !== false ? 'visible' : 'none' }},
             }}, beforeId);
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
-            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex }};
+            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata }};
             raiseDrawLayers();
         }}
 
@@ -2123,6 +2143,12 @@ async def serve_map(map_id: str, request: Request):
             add_arc(data) {{ addArc(data.asset_id, data.geojson, data.style, true, data.name, data.from, data.to, data.curvature, data.z_index); }},
 
             // ─── Asset management ───
+            update_metadata(data) {{ rememberAsset(data); }},
+            asset_updated(data) {{
+                rememberAsset(data);
+                if ('visible' in data) handlers.set_visibility(data);
+                if (data.style) handlers.update_style(data);
+            }},
             delete_asset(data) {{
                 if (selection.assetId === data.asset_id) deselectAsset();
                 const reg = assetRegistry[data.asset_id];
@@ -2427,7 +2453,7 @@ async def serve_map(map_id: str, request: Request):
                     layout: {{ visibility: vis }},
                 }}, beforeId);
 
-                assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile', zIndex: data.z_index }};
+                assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile', zIndex: data.z_index, visible: data.visible !== false, metadata: assetInfo[assetId]?.metadata }};
                 console.log('Added tile layer:', assetId, url, 'opacity:', opacity);
             }},
 
@@ -2638,6 +2664,9 @@ async def serve_map(map_id: str, request: Request):
             for (const id of Object.keys(deckArcs)) delete deckArcs[id];
             renderDeckArcs();
 
+            // Replace the presentation cache with persisted snapshot values.
+            for (const id of Object.keys(assetInfo)) delete assetInfo[id];
+            for (const asset of (snapshot.assets || [])) rememberAsset(asset);
             // Restore all assets
             for (const asset of (snapshot.assets || [])) {{
                 if (asset.asset_type && asset.asset_type.startsWith('geotiff_')) {{
@@ -2663,6 +2692,7 @@ async def serve_map(map_id: str, request: Request):
                     addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, asset.asset_type, asset.z_index);
                 }}
             }}
+            window.dispatchEvent(new CustomEvent('esip:assetschanged', {{ detail: {{ type: 'snapshot' }} }}));
             // Restore basemap — ONLY when it actually differs, and always
             // through the kind-aware set_basemap handler. Snapshots arrive on
             // every WS (re)connect, so this path must be a no-op when nothing
@@ -2818,6 +2848,7 @@ async def serve_map(map_id: str, request: Request):
         }}
 
         function updateDrawToolbar() {{
+            window.dispatchEvent(new CustomEvent('esip:interactionmode'));
             document.querySelectorAll('.draw-toolbar button[data-draw-mode]').forEach(btn => {{
                 btn.setAttribute('aria-pressed',
                     btn.getAttribute('data-draw-mode') === currentDrawMode ? 'true' : 'false');
@@ -3251,7 +3282,8 @@ async def serve_map(map_id: str, request: Request):
                         const data = await resp.json();
                         // Update the global and URL
                         window.USER_SESSION_AUTO = data.user_session_id;
-                        const newUrl = window.location.pathname + '?user_session=' + data.user_session_id;
+                        const newUrl = new URL(window.location.href);
+                        newUrl.searchParams.set('user_session', data.user_session_id);
                         window.history.replaceState(null, '', newUrl);
                         // Rebuild WS URL with the new session
                         const wsProto2 = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -3320,6 +3352,9 @@ async def serve_map(map_id: str, request: Request):
         window.__esipInternals = {{
             map: map,
             registry: assetRegistry,
+            assetInfo: assetInfo,
+            rememberAsset: rememberAsset,
+            deselectAsset: deselectAsset,
             basemaps: BASEMAPS,
             handlers: handlers,
             mapId: MAP_ID,

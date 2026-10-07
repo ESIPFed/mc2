@@ -2,7 +2,7 @@
 
 from .client import MapControl
 from .session import MapSession
-from .models import Asset, Viewport, Style, ScreenshotResult
+from .models import Asset, Viewport, Style, Metadata, ScreenshotResult
 
 __version__ = "0.3.0"
-__all__ = ["MapControl", "MapSession", "Asset", "Viewport", "Style", "ScreenshotResult"]
+__all__ = ["MapControl", "MapSession", "Asset", "Viewport", "Style", "Metadata", "ScreenshotResult"]

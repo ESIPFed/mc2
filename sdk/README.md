@@ -38,6 +38,15 @@ shot = session.take_screenshot()  # PNG of the current view
 | `MapSession` | A live map: assets, camera, GeoTIFFs, screenshots, themes, terrain |
 | `Asset`, `Viewport`, `Style`, `ScreenshotResult` | Typed models for the API |
 
+## Asset inspectors
+
+Attach referenced charts, images, or links to any asset through
+`metadata.extra.inspector`. Use `session.update_metadata(asset_id, metadata)`
+to update content after creation; connected viewers refresh and restored maps
+retain the metadata. Updates preserve omitted text fields and unrelated `extra`
+keys. See [the inspector contract](../docs/asset-inspector.md) for the schema,
+rendering behavior, and merge semantics.
+
 ## Running the server
 
 The server ships as a container:

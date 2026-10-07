@@ -6,12 +6,14 @@ import json
 import math
 import uuid
 from datetime import datetime, timezone
+from pydantic import ValidationError
 
 from ..database import get_db
 from ..config import load_config
 from ..models import (
     AssetMetadata,
     AssetStyle,
+    AssetUpdate,
     MapEvent,
     MapEventResponse,
     EventListItem,
@@ -110,6 +112,45 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
     db = await get_db()
     event_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+
+    # Validate every metadata descriptor before any asset/event write. In a
+    # batch, one invalid attachment must not leave a half-created collection.
+    # Never include validation input values in errors: URLs can be signed.
+    metadata_events = {
+        "add_point", "add_polygon", "add_path", "add_arc",
+        "add_polygon_url", "add_path_url", "update_metadata",
+    }
+    batch_events = {"add_points", "add_polygons", "add_paths"}
+    if event.type == "update_metadata" and (
+        not isinstance(event.data.get("asset_id"), str)
+        or not event.data.get("asset_id")
+        or not isinstance(event.data.get("metadata"), dict)
+    ):
+        return MapEventResponse(
+            event_id=event_id, type=event.type, created_at=now,
+            error="update_metadata requires 'asset_id' and a 'metadata' object",
+        )
+    try:
+        if event.type in metadata_events and "metadata" in event.data:
+            event.data["metadata"] = AssetMetadata.model_validate(
+                event.data["metadata"]
+            ).model_dump(exclude_unset=True)
+        elif event.type in batch_events:
+            for item in event.data.get("items", []):
+                if isinstance(item, dict) and "metadata" in item:
+                    item["metadata"] = AssetMetadata.model_validate(
+                        item["metadata"]
+                    ).model_dump(exclude_unset=True)
+    except ValidationError as exc:
+        errors = exc.errors(include_url=False, include_context=False, include_input=False)
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in errors
+        )
+        return MapEventResponse(
+            event_id=event_id, type=event.type, created_at=now,
+            error=f"Invalid metadata: {detail}",
+        )
 
     # Persist the event
     await db.execute(
@@ -274,7 +315,6 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         target_id = event.data.get("asset_id")
         visible = event.data.get("visible", True)
         if target_id:
-            from ..models import AssetUpdate
             await asset_service.update_asset(
                 map_id, target_id, AssetUpdate(visible=visible)
             )
@@ -283,7 +323,6 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         target_id = event.data.get("asset_id")
         style_data = event.data.get("style", {})
         if target_id:
-            from ..models import AssetUpdate
             style = AssetStyle(**style_data)
             await asset_service.update_asset(
                 map_id, target_id, AssetUpdate(style=style)
@@ -296,6 +335,22 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
             # fields travel), so e.g. an opacity-only update can't clobber
             # colors.
             event.data["style"] = style.model_dump(exclude_none=True)
+
+    elif event.type == "update_metadata":
+        target_id = event.data["asset_id"]
+        metadata = AssetMetadata.model_validate(event.data["metadata"])
+        asset = await asset_service.update_asset(
+            map_id, target_id, AssetUpdate(metadata=metadata)
+        )
+        if asset is None:
+            return MapEventResponse(
+                event_id=event_id, type=event.type, created_at=now,
+                error="Asset not found",
+            )
+        asset_id = asset.asset_id
+        # Broadcast the canonical merged value, so open viewers and clients
+        # restoring from storage see exactly the same metadata.
+        event.data["metadata"] = asset.metadata.model_dump()
 
     elif event.type == "set_theme":
         # Map-level UI theme (light | dark | auto). Persist so new viewers /
@@ -392,6 +447,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
                     "geojson": item.get("geojson", ""),
                     **({"style": item["style"]} if "style" in item else {}),
                     **({"name": item["name"]} if "name" in item else {}),
+                    **({"metadata": item["metadata"]} if "metadata" in item else {}),
                 },
             }
             await manager.broadcast_to_map(map_id, item_broadcast)
