@@ -1,33 +1,25 @@
-/* Independent of the optional layer-manager outfit: usable in controls/none. */
-.esip-inspector-popup { z-index: 40; font: 13px/1.45 Inter, system-ui, sans-serif; }
-.esip-inspector-popup .maplibregl-popup-content { padding: 0; border-radius: 12px; background: var(--eo-surface, #fff); color: var(--eo-text, #0f172a); box-shadow: 0 8px 32px #0004; overflow: hidden; }
-.esip-inspector-popup .maplibregl-popup-tip { border-top-color: var(--eo-surface, #fff); border-bottom-color: var(--eo-surface, #fff); }
-.esip-inspector-card { width: min(380px, calc(var(--inspector-map-width, 100vw) - 24px)); max-width: 100%; display: flex; flex-direction: column; max-height: min(560px, calc(var(--inspector-map-height, 100vh) - 40px), var(--inspector-available-height, 560px)); }
-.esip-inspector-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--eo-border, #e2e8f0); flex: 0 0 auto; }
-.esip-inspector-header h2 { font-size: 14px; margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.esip-inspector-button { appearance: none; cursor: pointer; font: inherit; color: inherit; background: var(--eo-surface-hover, #f1f5f9); border: 1px solid var(--eo-border, #cbd5e1); border-radius: 6px; padding: 5px 8px; }
-.esip-inspector-button:focus-visible, .esip-inspector-link:focus-visible { outline: 2px solid var(--eo-accent, #5fa830); outline-offset: 2px; }
-.esip-inspector-close { font-size: 20px; line-height: 20px; min-width: 30px; }
-.esip-inspector-body { overflow: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }
-.esip-inspector-description { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 12px; }
-.esip-inspector-details { margin-top: 12px; border-top: 1px solid var(--eo-border, #e2e8f0); padding-top: 8px; }
-.esip-inspector-details summary { cursor: pointer; font-weight: 600; }
-.esip-inspector-details[open] summary { margin-bottom: 8px; }
-.esip-inspector-status { color: var(--eo-text-muted, #475569); margin: 0 0 12px; }
-.esip-inspector-attachment + .esip-inspector-attachment { margin-top: 16px; }
-.esip-inspector-attachment h3 { font-size: 12px; margin: 0 0 6px; }
-.esip-inspector-frame { display: block; width: 100%; height: 320px; background: white; border: 0; border-radius: 5px; }
-.esip-inspector-image { display: block; width: 100%; max-height: 320px; object-fit: contain; border-radius: 5px; }
-.esip-inspector-link { display: inline-block; margin-top: 6px; color: var(--eo-accent, #396d1b); text-decoration: underline; }
-.esip-inspector-popup.is-expanded { transform: none !important; top: 12px; left: 12px; right: 12px; bottom: 12px; width: auto; max-width: none !important; }
-.esip-inspector-popup.is-expanded .maplibregl-popup-tip { display: none; }
-.esip-inspector-popup.is-expanded .maplibregl-popup-content { width: 100%; height: 100%; }
-.esip-inspector-popup.is-expanded .esip-inspector-card { width: 100%; height: 100%; max-height: none; }
-.esip-inspector-popup.is-expanded .esip-inspector-body { flex: 1; }
-.esip-inspector-popup.is-expanded .esip-inspector-frame { height: max(320px, calc(var(--inspector-map-height, 100vh) - 190px)); }
-@media (max-width: 520px) {
-  .esip-inspector-popup { transform: none !important; top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none !important; }
-  .esip-inspector-popup .maplibregl-popup-tip { display: none; }
-  .esip-inspector-card { width: 100%; max-height: calc(var(--inspector-map-height, 100vh) * .72); }
-  .esip-inspector-popup.is-expanded { top: 8px; }
-}
+/* Independent of the optional layer outfit; callouts belong to this viewer. */
+.esip-inspector-layer { position: absolute; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; font: 12px/1.35 Inter, system-ui, sans-serif; }
+.esip-inspector-connectors { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+.esip-inspector-connectors line { stroke: var(--eo-text-muted, #64748b); stroke-width: 1; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 1px #fff); }
+.esip-inspector-anchor { fill: var(--eo-accent, #5fa830); stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.esip-inspector-card { position: absolute; width: min(320px, calc(var(--inspector-map-width, 100vw) - 16px)); max-height: calc(var(--inspector-map-height, 100vh) - 16px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--eo-border, #dce2e9); border-radius: 7px; background: var(--eo-surface, #fff); color: var(--eo-text, #0f172a); box-shadow: 0 3px 14px #0003; box-sizing: border-box; pointer-events: auto; }
+.esip-inspector-card.is-preview { pointer-events: none; box-shadow: 0 2px 10px #0002; }
+.esip-inspector-header { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px; flex: 0 0 auto; user-select: none; touch-action: none; }
+.is-pinned .esip-inspector-header { cursor: grab; }
+.is-dragging .esip-inspector-header { cursor: grabbing; }
+.esip-inspector-header h2 { margin: 0; font-size: 11px; font-weight: 600; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.esip-inspector-grip { color: var(--eo-text-muted, #64748b); font-size: 15px; }
+.is-preview .esip-inspector-grip, .is-preview .esip-inspector-close, .is-pinned .esip-inspector-hint { display: none; }
+.esip-inspector-hint { font-size: 10px; color: var(--eo-text-muted, #64748b); }
+.esip-inspector-close { appearance: none; border: 0; border-radius: 4px; background: transparent; color: var(--eo-text-muted, #64748b); font: 18px/20px system-ui, sans-serif; width: 28px; height: 28px; margin-right: -5px; cursor: pointer; padding: 0; }
+.esip-inspector-close:hover { background: var(--eo-surface-hover, #f1f5f9); color: var(--eo-text, #0f172a); }
+.esip-inspector-header:focus-visible, .esip-inspector-close:focus-visible, .esip-inspector-link:focus-visible { outline: 2px solid var(--eo-accent, #5fa830); outline-offset: -2px; }
+.esip-inspector-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.esip-inspector-status { color: var(--eo-text-muted, #475569); margin: 12px; }
+.esip-inspector-attachment + .esip-inspector-attachment { border-top: 1px solid var(--eo-border, #e2e8f0); }
+.esip-inspector-frame { display: block; width: 100%; height: min(210px, calc(var(--inspector-map-height, 100vh) - 48px)); min-height: 80px; border: 0; background: #fff; }
+.is-preview .esip-inspector-frame { pointer-events: none; }
+.is-pinned .esip-inspector-frame { pointer-events: auto; }
+.esip-inspector-image { display: block; width: 100%; height: 210px; object-fit: contain; }
+.esip-inspector-link { display: inline-block; margin: 10px 12px; color: var(--eo-accent, #396d1b); text-decoration: underline; }

@@ -106,8 +106,14 @@
         hoverId = aid;
         map.getCanvas().style.cursor = "pointer";
         var reg = registry[aid] || {};
+        var inspector = window.ESIPMap && window.ESIPMap.inspector;
+        var handled = !!(inspector && inspector.claimHover && inspector.claimHover({
+          asset_id: aid, feature: feats[0], point: point,
+          lngLat: [lngLat.lng, lngLat.lat],
+        }));
         emit("asset_hover", {
           asset_id: aid,
+          inspector_handled: handled,
           name: reg.name || null,
           asset_type: reg.asset_type || null,
           point: { x: point.x, y: point.y },
