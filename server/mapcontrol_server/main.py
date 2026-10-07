@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -11,6 +12,19 @@ from pathlib import Path
 
 
 _SERVER_START_TIME = time.time()
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _ui_asset_url(root_path: str, filename: str) -> str:
+    """Keep a browser's UI scripts/styles in sync with the served map shell.
+
+    Old unversioned URLs can remain fresh in a browser cache across deployments.
+    A content hash changes the URL when the file changes; unchanged builds keep
+    their cache hits. These small files are read when serving the HTML, so local
+    static edits also receive a new version without requiring a process restart.
+    """
+    digest = hashlib.sha256((STATIC_DIR / filename).read_bytes()).hexdigest()[:16]
+    return f"{root_path}/static/{filename}?v={digest}"
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -439,15 +453,15 @@ async def serve_map(map_id: str, request: Request):
     # and publishes window.ESIPMap for bespoke UIs. The default outfit
     # (esip-embed.css/js) is loaded only when ui == "default".
     ui_head = (
-        f'<link rel="stylesheet" href="{root_path}/static/esip-embed.css">'
+        f'<link rel="stylesheet" href="{_ui_asset_url(root_path, "esip-embed.css")}">'
         if ui == "default" else ""
     )
-    ui_body = f'<script src="{root_path}/static/esip-contract.js"></script>'
+    ui_body = f'<script src="{_ui_asset_url(root_path, "esip-contract.js")}"></script>'
     if inspect_enabled:
-        ui_head += f'<link rel="stylesheet" href="{root_path}/static/esip-inspector.css">'
-        ui_body += f'<script src="{root_path}/static/esip-inspector.js"></script>'
+        ui_head += f'<link rel="stylesheet" href="{_ui_asset_url(root_path, "esip-inspector.css")}">'
+        ui_body += f'<script src="{_ui_asset_url(root_path, "esip-inspector.js")}"></script>'
     if ui == "default":
-        ui_body += f'<script src="{root_path}/static/esip-embed.js"></script>'
+        ui_body += f'<script src="{_ui_asset_url(root_path, "esip-embed.js")}"></script>'
 
 
     # Initial camera resolution (server-side). The page used to ALWAYS boot at
@@ -3371,7 +3385,9 @@ async def serve_map(map_id: str, request: Request):
 </body>
 </html>"""
 
-    return HTMLResponse(content=html)
+    # The shell selects content-versioned UI assets. Revalidate it on navigation
+    # so an existing browser also picks up the next deployment's asset URLs.
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-cache"})
 
 
 # ─── Screenshot endpoint ─────────────────────────────────────────────────────
@@ -4116,7 +4132,6 @@ async def terrain_demo_page(request: Request):
 # Serve the ESIP default-UI static assets (interaction contract + default
 # outfit). esip-contract.js is always injected into the served map;
 # esip-embed.{css,js} only when ?ui=default (or config.map.default_ui).
-STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="esip-static")
 
