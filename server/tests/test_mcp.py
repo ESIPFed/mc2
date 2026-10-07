@@ -591,7 +591,7 @@ def test_served_map_no_root_path():
     # WS built from window.location.host with an empty prefix
     assert "window.location.host + ROOT_PATH + '/ws/'" in html
     # esip-contract.js is ALWAYS injected; at root it has no prefix
-    assert '"/static/esip-contract.js"' in html
+    assert '"/static/esip-contract.js?v=' in html
     # base_url unprefixed → REST/screenshot URLs resolve at root
     assert 'const BASE_URL = "http://testserver";' in html
 
@@ -612,7 +612,7 @@ def test_served_map_with_root_path():
     assert f'const ROOT_PATH = "{prefix}";' in html
     assert "window.location.host + ROOT_PATH + '/ws/'" in html
     # static asset tags carry the prefix
-    assert f'"{prefix}/static/esip-contract.js"' in html
+    assert f'"{prefix}/static/esip-contract.js?v=' in html
     # base_url (and thus every BASE_URL-derived fetch) is auto-prefixed
     assert f'const BASE_URL = "http://testserver{prefix}";' in html
 
