@@ -26,8 +26,9 @@ from typing import Any
 import httpx
 import numpy as np
 import rasterio
-from rasterio.enums import MaskFlags
-from rasterio.warp import transform_bounds
+from rasterio.crs import CRS
+from rasterio.enums import MaskFlags, Resampling
+from rasterio.warp import calculate_default_transform, reproject, transform_bounds
 from matplotlib import colormaps
 from PIL import Image
 
@@ -184,6 +185,54 @@ def _compute_bounds_4326(dataset) -> list[float]:
 
     bounds = transform_bounds(src_crs, "EPSG:4326", *dataset.bounds)
     return list(bounds)  # [minLon, minLat, maxLon, maxLat]
+
+
+WEB_MERCATOR = CRS.from_epsg(3857)
+# Web Mercator is undefined past this latitude.
+_MERCATOR_MAX_LAT = 85.05
+
+
+def _to_web_mercator(rgba: np.ndarray, dataset) -> tuple[np.ndarray, list[float]]:
+    """Warp a rendered RGBA image onto a Web Mercator grid.
+
+    The browser places an overlay by its four corners and stretches it
+    linearly in Web Mercator, so only an image on a Web Mercator grid lands
+    where its pixels belong. A UTM or equal-area raster placed by its
+    lon/lat bounding box is rotated and stretched instead: kilometres off
+    for a large raster at high latitude, and two rasters in different
+    projections stop overlapping each other.
+
+    Warps the finished RGBA (nearest neighbour, so mask edges and classes
+    stay crisp; pixels outside the source footprint get alpha 0) and returns
+    it with its exact [minLon, minLat, maxLon, maxLat], an axis-aligned box
+    in both CRSs. Masking already ran on the native grid, unchanged.
+    """
+    bounds_4326 = _compute_bounds_4326(dataset)  # also rejects unplaceable files
+    src_crs = dataset.crs or CRS.from_epsg(4326)
+    if src_crs == WEB_MERCATOR:
+        return rgba, bounds_4326
+    if max(abs(bounds_4326[1]), abs(bounds_4326[3])) > _MERCATOR_MAX_LAT:
+        logger.warning("GeoTIFF reaches past %s° latitude; placing it unwarped", _MERCATOR_MAX_LAT)
+        return rgba, bounds_4326
+
+    height, width = rgba.shape[:2]
+    dst_transform, dst_width, dst_height = calculate_default_transform(
+        src_crs, WEB_MERCATOR, width, height, *dataset.bounds
+    )
+    warped = np.zeros((4, dst_height, dst_width), dtype=np.uint8)
+    reproject(
+        source=np.moveaxis(rgba, -1, 0),
+        destination=warped,
+        src_transform=dataset.transform,
+        src_crs=src_crs,
+        dst_transform=dst_transform,
+        dst_crs=WEB_MERCATOR,
+        resampling=Resampling.nearest,
+    )
+    left, top = dst_transform * (0, 0)
+    right, bottom = dst_transform * (dst_width, dst_height)
+    bounds = list(transform_bounds(WEB_MERCATOR, "EPSG:4326", left, bottom, right, top))
+    return np.moveaxis(warped, 0, -1), bounds
 
 
 def _bounds_to_geojson_polygon(bounds: list[float]) -> dict:
@@ -445,7 +494,7 @@ async def process_geotiff_rgb(
         # a raster renders.
         def _render() -> GeoTIFFResult:
             rgba, ds = _process_rgb(tif_path, bands, alpha, nodata)
-            bounds = _compute_bounds_4326(ds)
+            rgba, bounds = _to_web_mercator(rgba, ds)
             band_count = ds.count
             crs_str = str(ds.crs) if ds.crs else "unknown"
             ds.close()
@@ -549,7 +598,7 @@ async def process_geotiff_singleband(
                 tif_path, band, colormap, alpha,
                 vmin, vmax, percentile_min, percentile_max, nodata,
             )
-            bounds = _compute_bounds_4326(ds)
+            rgba, bounds = _to_web_mercator(rgba, ds)
             band_count = ds.count
             crs_str = str(ds.crs) if ds.crs else "unknown"
             ds.close()
