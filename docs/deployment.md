@@ -5,6 +5,9 @@ serves the map pages, the REST API, and the MCP endpoint on one port.
 This guide goes from the smallest thing that works to a full production
 setup, and explains what every knob does to the map.
 
+> **Not using Docker?** To run the server directly with Python from a source
+> checkout, see **[local-development.md](local-development.md)**.
+
 ## 1. Minimal — the smallest thing that works
 
 ```yaml
