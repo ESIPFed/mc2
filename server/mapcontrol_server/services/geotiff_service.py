@@ -335,9 +335,21 @@ def _process_rgb(
         normalized[m] = 0.0
         return np.clip(normalized, 0, 255).astype(np.uint8)
 
-    r_u8 = normalize_band(r, mask)
-    g_u8 = normalize_band(g, mask)
-    b_u8 = normalize_band(b_arr, mask)
+    if all(ds.dtypes[b - 1] == "uint8" for b in bands):
+        # 8-bit RGB is already display-ready (a true-colour product, or a
+        # writer that applied its own fixed stretch). Re-stretching it per
+        # band lets the scene set the colours: an ocean-dominated image has
+        # its noise amplified and its colour balance shifted.
+        def as_is(arr, m):
+            out = arr.copy()
+            out[m] = 0.0
+            return out.astype(np.uint8)
+
+        r_u8, g_u8, b_u8 = as_is(r, mask), as_is(g, mask), as_is(b_arr, mask)
+    else:
+        r_u8 = normalize_band(r, mask)
+        g_u8 = normalize_band(g, mask)
+        b_u8 = normalize_band(b_arr, mask)
 
     # Alpha channel: fully opaque for valid pixels, transparent for nodata/NaN
     # (actual translucency is handled by OpenLayers layer opacity, not baked into PNG)
