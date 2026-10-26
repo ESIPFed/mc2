@@ -93,3 +93,22 @@ def test_singleband_honors_mask_and_nodata(tmp_path):
     assert (alpha[3, :] == 0).all()
     assert alpha[1, 1] == 0            # value 5 = nodata tag
     assert alpha[0, 0] == 255 and alpha[2, 3] == 255
+
+
+def test_uint8_rgb_is_drawn_as_is_without_restretching(tmp_path):
+    data = np.full((3, 4, 4), 12, dtype=np.uint8)       # dark ocean, display-scaled
+    data[:, 0, 0] = (180, 150, 90)                      # one bright land pixel
+    data[:, 3, 3] = 0                                   # no-data
+    rgba, ds = _process_rgb(_write(tmp_path / "a.tif", data, nodata=0), [1, 2, 3], 1.0, None)
+    ds.close()
+    assert tuple(rgba[1, 1, :3]) == (12, 12, 12)        # not stretched up to mid-grey
+    assert tuple(rgba[0, 0, :3]) == (180, 150, 90)
+    assert rgba[3, 3, 3] == 0 and rgba[1, 1, 3] == 255
+
+
+def test_non_uint8_rgb_is_still_stretched(tmp_path):
+    data = np.full((3, 4, 4), 1200, dtype=np.uint16)
+    data[:, 0, 0] = 3000
+    rgba, ds = _process_rgb(_write(tmp_path / "a.tif", data), [1, 2, 3], 1.0, None)
+    ds.close()
+    assert rgba[0, 0, 0] == 255 and rgba[1, 1, 0] == 0
