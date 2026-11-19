@@ -1404,7 +1404,7 @@ async def serve_map(map_id: str, request: Request):
             const m = /^#([0-9a-f]{{6}})([0-9a-f]{{2}})?$/i.exec(color || '');
             if (!m) return color;
             const a = m[2] ? parseInt(m[2], 16) / 255 : 1;
-            const lifted = Math.min(1, a * 1.44 + 0.08);
+            const lifted = Math.min(1, a * 1.44); // the old 0.5 → 0.72 hover ratio; a clear fill stays clear
             return '#' + m[1] + Math.round(lifted * 255).toString(16).padStart(2, '0');
         }}
         function styleKeysChanged(prev, next, keys) {{
