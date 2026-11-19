@@ -11,7 +11,8 @@ import tempfile
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from mapcontrol_server.main import app, lifespan
+from mapcontrol_server.main import app
+from tests._harness import db_lifespan as lifespan
 from mapcontrol_server.models import AssetStyle
 
 POINT_GEOJSON = '{"type":"Feature","geometry":{"type":"Point","coordinates":[-97.7,30.27]},"properties":{"name":"P1"}}'
@@ -124,13 +125,13 @@ async def test_update_style_status_lifecycle(client, map_with_point):
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"status": "active"}},
     })
-    assert r.status_code == 200 and not r.json().get("error")
+    assert r.status_code == 201 and not r.json().get("error")
     # done → stop + complete
     r = await client.post(f"/api/maps/{map_id}/events", json={
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"status": "done"}},
     })
-    assert r.status_code == 200 and not r.json().get("error")
+    assert r.status_code == 201 and not r.json().get("error")
     asset = (await client.get(f"/api/maps/{map_id}/assets/{asset_id}")).json()
     assert asset["style"]["status"] == "done"
     assert asset["style"]["animate"] == []
@@ -140,7 +141,7 @@ async def test_update_style_status_lifecycle(client, map_with_point):
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"status": "muted"}},
     })
-    assert r.status_code == 200
+    assert r.status_code == 201
     asset = (await client.get(f"/api/maps/{map_id}/assets/{asset_id}")).json()
     assert asset["style"]["opacity"] < 0.5
 
@@ -151,6 +152,6 @@ async def test_update_style_opacity_only(client, map_with_point):
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"opacity": 0.42}},
     })
-    assert r.status_code == 200 and not r.json().get("error")
+    assert r.status_code == 201 and not r.json().get("error")
     asset = (await client.get(f"/api/maps/{map_id}/assets/{asset_id}")).json()
     assert asset["style"]["opacity"] == 0.42

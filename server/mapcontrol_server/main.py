@@ -243,14 +243,11 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                 # from agent-added analysis layers.
                 #
                 # The fill carries its translucency IN the color (8-digit
-                # hex, 0x80 = 50%) rather than relying on the fill layer's
-                # baked-in base fill-opacity: agent-added polygons already
-                # follow this convention (e.g. #3388ff20), and the EoGPT
-                # layer drawer's alpha slider seeds from the color's alpha
-                # byte — a 6-digit fill reads as 100% there while rendering
-                # translucent, which is exactly the mismatch this avoids.
+                # hex, 0x40 = 25%): that byte is exactly the rendered fill
+                # alpha, so layer managers that seed their alpha slider from
+                # it show what the map draws.
                 style = AssetStyle(
-                    fill_color="#7cc24280",
+                    fill_color="#7cc24240",
                     stroke_color="#5fa830",
                     stroke_width=2.0,
                 )
@@ -276,7 +273,12 @@ async def websocket_endpoint(websocket: WebSocket, map_id: str, user_session_id:
                         "data": {
                             "asset_id": asset.asset_id,
                             "geojson": geojson_str,
-                            "style": style.model_dump(),
+                            "style": asset.style.model_dump(exclude_none=True),
+                            "name": asset.name,
+                            "asset_type": asset_type,
+                            "visible": True,
+                            "z_index": asset.z_index,
+                            "layer_z": await asset_service.layer_z(map_id),
                             "client_id": client_id,
                         },
                     }
@@ -1137,7 +1139,10 @@ async def serve_map(map_id: str, request: Request):
 
         // ─── Helpers ───
         function getStyleProp(style, prop, fallback) {{
-            return (style && style[prop]) || fallback;
+            // null/undefined/'' mean "unset → default"; 0 is a real value
+            // (stroke_width: 0 draws no outline).
+            const v = style ? style[prop] : undefined;
+            return (v === undefined || v === null || v === '') ? fallback : v;
         }}
 
         // Atmospheric sky for 3D/globe terrain modes. MapLibre GL JS has no
@@ -1363,26 +1368,166 @@ async def serve_map(map_id: str, request: Request):
             return out;
         }}
 
+        // ─── Opacity model ───
+        // The alpha byte of a #RRGGBBAA color IS the drawn alpha, and
+        // style.opacity (0..1, default 1) multiplies fills, outlines,
+        // markers and rasters uniformly. There is no hidden base factor:
+        // fills used to be drawn at 0.5 × their color alpha, and
+        // set_opacity(x) at x — the same number meant two different things,
+        // and no layer manager could show what the map drew.
+        function styleOpacity(s) {{
+            const op = Number(getStyleProp(s, 'opacity', 1));
+            return isFinite(op) ? Math.min(1, Math.max(0, op)) : 1;
+        }}
         function applyStaticOpacity(assetId, opacity) {{
-            // Flat opacity on all of an asset's paint layers (style.opacity).
-            // null/undefined restores renderer defaults. Fill keeps the
-            // hover-brighten expression, scaled by the requested opacity.
-            const op = (opacity === null || opacity === undefined) ? null
+            const op = (opacity === null || opacity === undefined) ? 1
                 : Math.min(1, Math.max(0, Number(opacity)));
-            const fillId = 'fill-' + assetId, lineId = 'line-' + assetId, circleId = 'circle-' + assetId;
-            try {{
-                if (map.getLayer(fillId)) {{
-                    map.setPaintProperty(fillId, 'fill-opacity', op === null
-                        ? ['case', ['boolean', ['feature-state', 'hover'], false], 0.72, 0.5]
-                        : ['case', ['boolean', ['feature-state', 'hover'], false],
-                            Math.min(1, 0.72 * op + 0.2 * op), 0.5 * op]);
+            const reg = assetRegistry[assetId];
+            const ids = reg ? reg.layerIds : ['fill-' + assetId, 'line-' + assetId, 'circle-' + assetId];
+            for (const lid of ids) {{
+                const layer = map.getLayer(lid);
+                if (!layer) continue;
+                try {{
+                    if (layer.type === 'fill') map.setPaintProperty(lid, 'fill-opacity', op);
+                    else if (layer.type === 'line') map.setPaintProperty(lid, 'line-opacity', op);
+                    else if (layer.type === 'raster') map.setPaintProperty(lid, 'raster-opacity', op);
+                    else if (layer.type === 'circle' && lid === 'circle-' + assetId) {{
+                        map.setPaintProperty(lid, 'circle-opacity', op);
+                        map.setPaintProperty(lid, 'circle-stroke-opacity', op);
+                    }}
+                }} catch (e) {{}}
+            }}
+        }}
+        // Hovered polygons brighten by lifting their fill's own alpha (the
+        // old hover lifted the hidden 0.5 factor, which no longer exists).
+        function hoverFillColor(color) {{
+            const m = /^#([0-9a-f]{{6}})([0-9a-f]{{2}})?$/i.exec(color || '');
+            if (!m) return color;
+            const a = m[2] ? parseInt(m[2], 16) / 255 : 1;
+            const lifted = Math.min(1, a * 1.44); // the old 0.5 → 0.72 hover ratio; a clear fill stays clear
+            return '#' + m[1] + Math.round(lifted * 255).toString(16).padStart(2, '0');
+        }}
+        function styleKeysChanged(prev, next, keys) {{
+            return keys.some(k => JSON.stringify(prev ? prev[k] : undefined)
+                !== JSON.stringify(next ? next[k] : undefined));
+        }}
+
+        // ─── The one style → paint mapping ───
+        // Every path that draws an asset goes through here: add, session
+        // restore, update_style, set_opacity, asset_updated. `style` is the
+        // asset's COMPLETE stored style (the server merges updates and
+        // broadcasts the result), so a missing key means "renderer
+        // default", never "keep what was drawn" — that difference is how the
+        // live map and a reload used to disagree.
+        function applyAssetStyle(assetId, style) {{
+            const reg = assetRegistry[assetId];
+            if (!reg) return;
+            const s = style || {{}};
+            const prev = reg.style;          // undefined on the first apply
+            const first = prev === undefined;
+            const wasSelected = selection.assetId === assetId;
+            if (wasSelected) deselectAsset();  // saved emphasis would go stale
+            const op = styleOpacity(s);
+            const fillColor = (s.mask && !s.fill_color) ? 'rgba(0,0,0,0)'
+                : getStyleProp(s, 'fill_color', DEFAULT_STYLE.fill_color);
+            const strokeColor = getStyleProp(s, 'stroke_color', DEFAULT_STYLE.stroke_color);
+            const strokeWidth = Number(getStyleProp(s, 'stroke_width', DEFAULT_STYLE.stroke_width));
+            const lineDash = (Array.isArray(s.line_dash) && s.line_dash.length > 0) ? s.line_dash : null;
+            const colorExpr = (reg.geojson && s.color_by) ? colorByExpression(s.color_by, reg.geojson) : null;
+            const dashChanged = first ? !!lineDash : styleKeysChanged(prev, s, ['line_dash']);
+            const set = (lid, k, v) => {{ try {{ map.setPaintProperty(lid, k, v); }} catch (e) {{}} }};
+            for (const lid of reg.layerIds) {{
+                const layer = map.getLayer(lid);
+                if (!layer) continue;
+                if (layer.type === 'raster') {{
+                    set(lid, 'raster-opacity', op);
+                }} else if (layer.type === 'fill') {{
+                    set(lid, 'fill-color', colorExpr || ['case',
+                        ['boolean', ['feature-state', 'hover'], false], hoverFillColor(fillColor), fillColor]);
+                    set(lid, 'fill-opacity', op);
+                }} else if (layer.type === 'line') {{
+                    set(lid, 'line-color', colorExpr || strokeColor);
+                    set(lid, 'line-width', strokeWidth);
+                    if (dashChanged) set(lid, 'line-dasharray', lineDash || null);
+                    set(lid, 'line-opacity', op);
+                }} else if (layer.type === 'circle' && lid === 'circle-' + assetId) {{
+                    set(lid, 'circle-color', colorExpr || fillColor);
+                    set(lid, 'circle-stroke-color', strokeColor);
+                    set(lid, 'circle-stroke-width', strokeWidth);
+                    set(lid, 'circle-opacity', op);
+                    set(lid, 'circle-stroke-opacity', op);
                 }}
-                if (map.getLayer(lineId)) map.setPaintProperty(lineId, 'line-opacity', op === null ? 1 : op);
-                if (map.getLayer(circleId)) {{
-                    map.setPaintProperty(circleId, 'circle-opacity', op === null ? 1 : op);
-                    map.setPaintProperty(circleId, 'circle-stroke-opacity', op === null ? 1 : op);
+            }}
+            let restack = false;
+            // Labels: (re)built only when a label-affecting key changed, and
+            // always with the asset's CURRENT visibility.
+            if (reg.geomTypes && (first ? !!s.label
+                    : styleKeysChanged(prev, s, ['label', 'label_placement', 'label_color', 'label_size', 'stroke_color']))) {{
+                const labelId = 'label-' + assetId;
+                if (map.getLayer(labelId)) map.removeLayer(labelId);
+                const i = reg.layerIds.indexOf(labelId);
+                if (i !== -1) reg.layerIds.splice(i, 1);
+                const newId = addLabelLayer(assetId, reg.srcId, s, reg.visible !== false ? 'visible' : 'none',
+                    reg.name, new Set(reg.geomTypes));
+                if (newId) {{ reg.layerIds.push(newId); restack = !first; }}
+            }}
+            // Mask
+            if (reg.geomTypes && reg.geomTypes.includes('fill')
+                    && (first ? !!s.mask : styleKeysChanged(prev, s, ['mask']))) {{
+                setAssetMask(assetId, s.mask || null);
+            }}
+            // Animation (overrides static opacity while running)
+            const animated = (Array.isArray(s.animate) && s.animate.length > 0) || !!s.glow;
+            if (first ? animated : styleKeysChanged(prev, s, ['animate', 'glow'])) {{
+                unregisterAnim(assetId, op);
+                if (animated) registerAnim(assetId, s);
+            }} else if (animAssets[assetId]) {{
+                animAssets[assetId].staticOpacity = op;
+            }}
+            if (deckArcs[assetId]) {{
+                deckArcs[assetId].color = hexToRgba(strokeColor);
+                deckArcs[assetId].width = strokeWidth || 3;
+                renderDeckArcs();
+            }}
+            reg.style = s;
+            if (restack) restackAll();
+            if (wasSelected) selectAsset(assetId);
+        }}
+
+        // ─── Canonical stacking ───
+        // The server's z_index is the only order. Every broadcast that can
+        // move any asset carries `layer_z` (every asset's stored z); the
+        // viewer adopts those numbers instead of renumbering on its own, so
+        // a raster insert (which shifts every vector above it) or a reorder
+        // can't leave the live stack and the DB disagreeing.
+        let latestLayerZ = {{}};
+        function adoptLayerZ(layerZ) {{
+            if (!layerZ || typeof layerZ !== 'object') return;
+            latestLayerZ = layerZ;
+            for (const [aid, reg] of Object.entries(assetRegistry)) {{
+                if (aid in layerZ) reg.zIndex = layerZ[aid];
+            }}
+        }}
+        function zFor(assetId, fallback) {{
+            return (assetId in latestLayerZ) ? latestLayerZ[assetId] : fallback;
+        }}
+        // Re-stack every asset bottom→top by zIndex: each asset's layers move
+        // to the top in turn, so the last moved renders on top. Basemap
+        // layers are never moved, so they stay underneath.
+        function restackAll() {{
+            const regs = Object.entries(assetRegistry)
+                .sort((a, b) => (a[1].zIndex ?? 0) - (b[1].zIndex ?? 0));
+            for (const [aid, reg] of regs) {{
+                for (const lid of reg.layerIds) {{
+                    if (map.getLayer(lid)) {{ try {{ map.moveLayer(lid); }} catch (e) {{}} }}
                 }}
-            }} catch (e) {{}}
+                const halo = 'halo-' + aid, circle = 'circle-' + aid;
+                if (map.getLayer(halo) && map.getLayer(circle)) {{
+                    try {{ map.moveLayer(halo, circle); }} catch (e) {{}}
+                }}
+            }}
+            if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
+            raiseDrawLayers();
         }}
 
         // ─── Mask engine (spotlight / focus effect, style.mask) ──────────
@@ -1768,12 +1913,9 @@ async def serve_map(map_id: str, request: Request):
                 map.addLayer({{
                     id: fillId, type: 'fill', source: srcId,
                     filter: ['any', ['==', '$type', 'Polygon']],
-                    paint: {{
-                        'fill-color': colorExpr || fillColor,
-                        // Feature-state hover: brighten the hovered polygon
-                        'fill-opacity': ['case',
-                            ['boolean', ['feature-state', 'hover'], false], 0.72, 0.5],
-                    }},
+                    // Final paint (hover lift, opacity) comes from
+                    // applyAssetStyle below, like every later update.
+                    paint: {{ 'fill-color': colorExpr || fillColor }},
                     layout: {{ visibility: vis }},
                 }});
                 layerIds.push(fillId);
@@ -1807,21 +1949,12 @@ async def serve_map(map_id: str, request: Request):
                 layerIds.push(circleId);
             }}
 
-            // Optional text label (style.label / label_placement / ...)
-            const labelId = addLabelLayer(assetId, srcId, s, vis, name, geomTypes);
-            if (labelId) layerIds.push(labelId);
-
-            // geojson kept so update_style can rebuild the mask layer later.
-            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson, zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata }};
+            // geojson kept so styles (color_by, mask) can be re-derived later.
+            assetRegistry[assetId] = {{ layerIds, bounds: geojsonBounds(geojson), srcId, name: name || null, asset_type: assetType || 'vector', geomTypes: Array.from(geomTypes), geojson, zIndex: zFor(assetId, zIndex), visible: visible !== false, metadata: assetInfo[assetId]?.metadata }};
+            // Labels, mask, opacity and animation: the same code path every
+            // later style change uses.
+            applyAssetStyle(assetId, s);
             applyZPosition(assetId);
-
-            // Optional mask (style.mask): darken everything outside the polygon
-            if (s.mask && geomTypes.has('fill')) setAssetMask(assetId, s.mask);
-            // Static opacity (style.opacity), then optional animation
-            // (style.animate / style.glow) — the animation overrides the
-            // static value while running.
-            if (s.opacity !== undefined && s.opacity !== null) applyStaticOpacity(assetId, s.opacity);
-            if ((Array.isArray(s.animate) && s.animate.length > 0) || s.glow) registerAnim(assetId, s);
             raiseDrawLayers();
         }}
 
@@ -1879,28 +2012,40 @@ async def serve_map(map_id: str, request: Request):
             }}
         }}
 
-        // After a client-side re-stack (move_layer / reorder_assets), refresh
-        // every registry zIndex from the ACTUAL style order so later inserts
-        // compute their slot against reality. (Absolute values don't need to
-        // match the server's — only the relative order does.)
-        function syncRegistryZOrder() {{
-            const layerToAsset = {{}};
-            for (const [aid, reg] of Object.entries(assetRegistry)) {{
-                for (const lid of reg.layerIds) layerToAsset[lid] = aid;
-            }}
-            const layers = (map.getStyle() || {{}}).layers || [];
-            let z = 0;
-            const seen = new Set();
-            for (const l of layers) {{
-                const aid = layerToAsset[l.id];
-                if (aid && !seen.has(aid)) {{
-                    seen.add(aid);
-                    assetRegistry[aid].zIndex = z++;
-                }}
-            }}
+        // XYZ/WMS tile overlay. Shared by the live add_tile_layer event and
+        // session restore (tile layers used to vanish on reload: the restore
+        // path treated them as empty GeoJSON).
+        function addTileLayer(data) {{
+            const assetId = data.asset_id;
+            const srcId = 'src-' + assetId;
+            const layerId = 'tile-' + assetId;
+            const url = data.url;
+            const style = data.style || {{ opacity: (data.opacity > 1 ? data.opacity / 100 : data.opacity) ?? 1 }};
+            const vis = data.visible !== false ? 'visible' : 'none';
+            if (!url || map.getSource(srcId)) return;
+            map.addSource(srcId, {{
+                type: 'raster',
+                tiles: [url],
+                tileSize: 256,
+                attribution: data.attribution || '',
+            }});
+            const zIndex = zFor(assetId, data.z_index);
+            // Slot per canonical z_index (legacy fallback: below vectors,
+            // same as GeoTIFFs)
+            const beforeId = (zIndex !== undefined && zIndex !== null)
+                ? beforeIdForZ(zIndex) : getFirstVectorLayerId();
+            map.addLayer({{
+                id: layerId,
+                type: 'raster',
+                source: srcId,
+                paint: {{ 'raster-opacity': styleOpacity(style) }},
+                layout: {{ visibility: vis }},
+            }}, beforeId);
+            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile', zIndex, visible: data.visible !== false, metadata: assetInfo[assetId]?.metadata, style }};
+            raiseDrawLayers();
         }}
 
-        async function addImageOverlay(assetId, imageUrl, bounds, opacity, visible, name, assetType, zIndex) {{
+        async function addImageOverlay(assetId, imageUrl, bounds, style, visible, name, assetType, zIndex) {{
             // bounds = [minLon, minLat, maxLon, maxLat]
             const fullUrl = imageUrl.startsWith('http') ? imageUrl : BASE_URL + imageUrl;
             const srcId = 'src-' + assetId;
@@ -1923,6 +2068,9 @@ async def serve_map(map_id: str, request: Request):
                 console.warn('[GeoTIFF] Blob fetch failed, using direct URL:', e.message);
             }}
             map.addSource(srcId, {{ type: 'image', url: imgSrc, coordinates: coords }});
+            // The image fetch above is async: by now later broadcasts may
+            // have moved the stack, so take the z from the newest layer_z.
+            zIndex = zFor(assetId, zIndex);
             // Slot per the server's canonical z_index; a legacy broadcast
             // without one falls back to "below all vectors" (the same rule
             // the server now encodes at creation).
@@ -1930,11 +2078,11 @@ async def serve_map(map_id: str, request: Request):
                 ? beforeIdForZ(zIndex) : getFirstVectorLayerId();
             map.addLayer({{
                 id: layerId, type: 'raster', source: srcId,
-                paint: {{ 'raster-opacity': opacity || 1.0 }},
+                paint: {{ 'raster-opacity': styleOpacity(style) }},
                 layout: {{ visibility: visible !== false ? 'visible' : 'none' }},
             }}, beforeId);
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
-            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata }};
+            assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata, style: style || {{}} }};
             raiseDrawLayers();
         }}
 
@@ -2146,22 +2294,22 @@ async def serve_map(map_id: str, request: Request):
                 // Drawn-shape echo: drop our pending-styled copy first (no-op
                 // for other sessions / agent-created polygons).
                 removePendingDraw(data.client_id);
-                addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon', data.z_index);
+                addGeoJSON(data.asset_id, data.geojson, data.style, data.visible, data.name, data.asset_type || 'polygon', data.z_index);
             }},
-            add_polygon_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'polygon', data.z_index); }},
-            add_path(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path', data.z_index); }},
-            add_path_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'path', data.z_index); }},
-            add_point(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, true, data.name, 'point', data.z_index); }},
+            add_polygon_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, data.visible, data.name, 'polygon', data.z_index); }},
+            add_path(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, data.visible, data.name, 'path', data.z_index); }},
+            add_path_url(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, data.visible, data.name, 'path', data.z_index); }},
+            add_point(data) {{ addGeoJSON(data.asset_id, data.geojson, data.style, data.visible, data.name, 'point', data.z_index); }},
             // Arc: 3D deck.gl ArcLayer (+ MapLibre endpoint dots/labels);
             // falls back to the stored flat LineString if deck is unavailable.
-            add_arc(data) {{ addArc(data.asset_id, data.geojson, data.style, true, data.name, data.from, data.to, data.curvature, data.z_index); }},
+            add_arc(data) {{ addArc(data.asset_id, data.geojson, data.style, data.visible, data.name, data.from, data.to, data.curvature, data.z_index); }},
 
             // ─── Asset management ───
             update_metadata(data) {{ rememberAsset(data); }},
             asset_updated(data) {{
                 rememberAsset(data);
                 if ('visible' in data) handlers.set_visibility(data);
-                if (data.style) handlers.update_style(data);
+                if (data.style) applyAssetStyle(data.asset_id, data.style);
             }},
             delete_asset(data) {{
                 if (selection.assetId === data.asset_id) deselectAsset();
@@ -2197,84 +2345,12 @@ async def serve_map(map_id: str, request: Request):
                 }}
             }},
             update_style(data) {{
-                // Drop any selection emphasis first: the saved paint values
-                // are about to go stale, and restoring them later would undo
-                // this style change.
-                if (selection.assetId === data.asset_id) deselectAsset();
+                // The server broadcasts the merged, COMPLETE style (`full`).
+                // An older server sent only the changed keys: merge those
+                // onto what is drawn so they still apply.
                 const reg = assetRegistry[data.asset_id];
-                if (reg && data.style) {{
-                    const s = data.style;
-                    for (const lid of reg.layerIds) {{
-                        const layer = map.getLayer(lid);
-                        if (!layer) continue;
-                        if (layer.type === 'fill') {{
-                            if (s.fill_color) map.setPaintProperty(lid, 'fill-color', s.fill_color);
-                        }} else if (layer.type === 'line') {{
-                            if (s.stroke_color) map.setPaintProperty(lid, 'line-color', s.stroke_color);
-                            if (s.stroke_width) map.setPaintProperty(lid, 'line-width', s.stroke_width);
-                            // line_dash: array of dash lengths (in line-widths). Empty/null = solid.
-                            if (s.line_dash !== undefined) {{
-                                if (Array.isArray(s.line_dash) && s.line_dash.length > 0) {{
-                                    map.setPaintProperty(lid, 'line-dasharray', s.line_dash);
-                                }} else {{
-                                    map.setPaintProperty(lid, 'line-dasharray', [1]);
-                                }}
-                            }}
-                        }} else if (layer.type === 'circle') {{
-                            if (s.fill_color) map.setPaintProperty(lid, 'circle-color', s.fill_color);
-                            if (s.stroke_color) map.setPaintProperty(lid, 'circle-stroke-color', s.stroke_color);
-                            if (s.stroke_width) map.setPaintProperty(lid, 'circle-stroke-width', s.stroke_width);
-                        }} else if (layer.type === 'symbol') {{
-                            if (s.label_color) map.setPaintProperty(lid, 'text-color', s.label_color);
-                            if (s.label_size) map.setLayoutProperty(lid, 'text-size', s.label_size);
-                        }}
-                    }}
-                    // Label add/remove/re-place: rebuild the symbol layer when
-                    // label or label_placement is present in the update.
-                    if (s.label !== undefined || s.label_placement !== undefined) {{
-                        const labelId = 'label-' + data.asset_id;
-                        if (map.getLayer(labelId)) {{
-                            map.removeLayer(labelId);
-                            const i = reg.layerIds.indexOf(labelId);
-                            if (i !== -1) reg.layerIds.splice(i, 1);
-                        }}
-                        if (s.label) {{
-                            const geomTypes = new Set(reg.geomTypes || []);
-                            const newId = addLabelLayer(data.asset_id, reg.srcId, s, 'visible', reg.name, geomTypes);
-                            if (newId) reg.layerIds.push(newId);
-                        }}
-                    }}
-                    // Static opacity via update_style (applied first; a
-                    // running animation re-drives opacity on its next tick)
-                    if (s.opacity !== undefined) {{
-                        applyStaticOpacity(data.asset_id, s.opacity);
-                        if (animAssets[data.asset_id]) {{
-                            animAssets[data.asset_id].staticOpacity = s.opacity;
-                        }}
-                    }}
-                    // Animation start/stop/re-tune via update_style.
-                    // animate: []  → stop; animate: [...] → replace effects;
-                    // glow keeps working as the back-compat alias.
-                    if (s.animate !== undefined || s.glow !== undefined) {{
-                        unregisterAnim(data.asset_id, s.opacity);
-                        registerAnim(data.asset_id, s);
-                    }}
-                    // Mask add/remove/re-tune via update_style. The fill layer
-                    // is left untouched unless mask is being turned ON with
-                    // no fill color — then the interior is cleared to the
-                    // bare map.
-                    if (s.mask !== undefined) {{
-                        if (s.mask && !reg.geojson) {{
-                            const src = map.getSource(reg.srcId);
-                            if (src && src._data) reg.geojson = (typeof src._data === 'string') ? JSON.parse(src._data) : src._data;
-                        }}
-                        setAssetMask(data.asset_id, s.mask);
-                        const fid = 'fill-' + data.asset_id;
-                        if (s.mask && !s.fill_color && map.getLayer(fid)) {{
-                            map.setPaintProperty(fid, 'fill-color', 'rgba(0,0,0,0)');
-                        }}
-                    }}
-                }}
+                if (!reg || !data.style) return;
+                applyAssetStyle(data.asset_id, data.full ? data.style : {{ ...(reg.style || {{}}), ...data.style }});
             }},
 
             // ─── Basemap ───
@@ -2395,10 +2471,10 @@ async def serve_map(map_id: str, request: Request):
 
             // ─── GeoTIFF Handlers ───
             add_geotiff_rgb(data) {{
-                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_rgb', data.z_index);
+                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.style || {{ opacity: data.alpha ?? 1 }}, data.visible, data.name, 'geotiff_rgb', data.z_index);
             }},
             add_geotiff_singleband(data) {{
-                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.alpha || 1.0, true, data.name, 'geotiff_singleband', data.z_index);
+                addImageOverlay(data.asset_id, data.image_url, data.bounds, data.style || {{ opacity: data.alpha ?? 1 }}, data.visible, data.name, 'geotiff_singleband', data.z_index);
             }},
 
             // ─── Drawing Control (from SDK/API) ───
@@ -2437,149 +2513,42 @@ async def serve_map(map_id: str, request: Request):
             }},
 
             // ─── Tile Layers (XYZ, WMS, etc.) ───
-            add_tile_layer(data) {{
-                const assetId = data.asset_id;
-                const srcId = 'src-' + assetId;
-                const layerId = 'tile-' + assetId;
-                const url = data.url;
-                // Normalize opacity: if > 1, treat as percentage (e.g. 40 → 0.4)
-                let opacity = data.opacity !== undefined ? data.opacity : 1.0;
-                if (opacity > 1) opacity = opacity / 100;
-                opacity = Math.max(0, Math.min(1, opacity));
-                const vis = data.visible !== false ? 'visible' : 'none';
-
-                map.addSource(srcId, {{
-                    type: 'raster',
-                    tiles: [url],
-                    tileSize: 256,
-                    attribution: data.attribution || '',
-                }});
-
-                // Slot per canonical z_index (legacy fallback: below vectors,
-                // same as GeoTIFFs)
-                const beforeId = (data.z_index !== undefined && data.z_index !== null)
-                    ? beforeIdForZ(data.z_index) : getFirstVectorLayerId();
-                map.addLayer({{
-                    id: layerId,
-                    type: 'raster',
-                    source: srcId,
-                    paint: {{ 'raster-opacity': opacity }},
-                    layout: {{ visibility: vis }},
-                }}, beforeId);
-
-                assetRegistry[assetId] = {{ layerIds: [layerId], bounds: null, srcId, tileUrl: url, name: data.name || null, asset_type: 'tile', zIndex: data.z_index, visible: data.visible !== false, metadata: assetInfo[assetId]?.metadata }};
-                console.log('Added tile layer:', assetId, url, 'opacity:', opacity);
-            }},
-
+            add_tile_layer(data) {{ addTileLayer(data); }},
             remove_tile_layer(data) {{
                 handlers.delete_asset(data);
             }},
 
             // ─── Opacity Control ───
+            // set_opacity is stored as style.opacity; the server broadcasts
+            // the resulting complete style.
             set_opacity(data) {{
                 const reg = assetRegistry[data.asset_id];
                 if (!reg) return;
-                // Normalize: if > 1, treat as percentage (e.g. 40 → 0.4)
-                let rawOpacity = data.opacity;
-                if (rawOpacity > 1) rawOpacity = rawOpacity / 100;
-                const opacity = Math.max(0, Math.min(1, rawOpacity));
-                for (const lid of reg.layerIds) {{
-                    const layer = map.getLayer(lid);
-                    if (!layer) continue;
-                    if (layer.type === 'raster') {{
-                        map.setPaintProperty(lid, 'raster-opacity', opacity);
-                    }} else if (layer.type === 'fill') {{
-                        map.setPaintProperty(lid, 'fill-opacity', opacity);
-                    }} else if (layer.type === 'line') {{
-                        map.setPaintProperty(lid, 'line-opacity', opacity);
-                    }} else if (layer.type === 'circle') {{
-                        map.setPaintProperty(lid, 'circle-opacity', opacity);
-                        map.setPaintProperty(lid, 'circle-stroke-opacity', opacity);
-                    }}
-                }}
-                console.log('Set opacity:', data.asset_id, opacity);
+                let op = Number(data.opacity);
+                if (op > 1) op = op / 100;
+                op = isFinite(op) ? Math.max(0, Math.min(1, op)) : 1;
+                applyAssetStyle(data.asset_id, data.style || {{ ...(reg.style || {{}}), opacity: op }});
             }},
 
             // ─── Layer Ordering ───
-            move_layer(data) {{
-                const reg = assetRegistry[data.asset_id];
-                if (!reg) return;
-                const position = data.position; // 'up', 'down', 'top', 'bottom'
-                const allLayers = map.getStyle().layers;
-                const ourLayers = reg.layerIds.filter(lid => map.getLayer(lid));
-                if (ourLayers.length === 0) return;
-
-                if (position === 'top') {{
-                    // Move to top of all layers
-                    for (const lid of ourLayers) {{
-                        map.moveLayer(lid);
-                    }}
-                }} else if (position === 'bottom') {{
-                    // Move just above basemap layers
-                    const firstNonBasemap = allLayers.find(l => !isBasemapLayer(l.id));
-                    if (firstNonBasemap) {{
-                        for (const lid of ourLayers) {{
-                            map.moveLayer(lid, firstNonBasemap.id);
-                        }}
-                    }}
-                }} else if (position === 'up') {{
-                    // Move above the next layer
-                    const topLayer = ourLayers[ourLayers.length - 1];
-                    const idx = allLayers.findIndex(l => l.id === topLayer);
-                    if (idx >= 0 && idx < allLayers.length - 1) {{
-                        // Find the next non-our layer above
-                        for (let i = idx + 1; i < allLayers.length; i++) {{
-                            if (!ourLayers.includes(allLayers[i].id)) {{
-                                // Move our layers above this one
-                                map.moveLayer(topLayer);
-                                break;
-                            }}
-                        }}
-                    }}
-                }} else if (position === 'down') {{
-                    // Move below the previous layer, but never below the basemap stack
-                    const bottomLayer = ourLayers[0];
-                    const idx = allLayers.findIndex(l => l.id === bottomLayer);
-                    if (idx > basemapIds.length) {{
-                        for (let i = idx - 1; i >= 0; i--) {{
-                            if (!ourLayers.includes(allLayers[i].id) && !isBasemapLayer(allLayers[i].id)) {{
-                                map.moveLayer(bottomLayer, allLayers[i].id);
-                                break;
-                            }}
-                        }}
-                    }}
-                }}
-                // Keep the shared mask beneath the lowest masked asset.
-                if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
-                raiseDrawLayers();
-                syncRegistryZOrder();
-                console.log('Moved layer:', data.asset_id, position);
-            }},
-
-            // ─── Full re-stack (drag-to-reorder in layer managers) ───
-            // data.asset_ids: complete stacking order, TOP-most first.
-            // Walk bottom→top moving each asset's layers to the top of the
-            // style, so the last-moved (list-top) asset renders on top.
-            // Relative order of non-listed layers (basemap etc.) is kept
-            // because we only move user asset layers.
-            reorder_assets(data) {{
-                const ids = (data.asset_ids || []).slice().reverse();  // bottom-most first
-                for (const id of ids) {{
-                    const reg = assetRegistry[id];
-                    if (!reg) continue;
-                    for (const lid of reg.layerIds) {{
-                        if (map.getLayer(lid)) {{
-                            try {{ map.moveLayer(lid); }} catch (e) {{}}
-                        }}
-                    }}
-                }}
-                // Keep the shared mask beneath the lowest masked asset.
-                if (map.getLayer(MASK_LAYER_ID)) rebuildMask();
-                raiseDrawLayers();
-                syncRegistryZOrder();
-                console.log('Reordered assets (top first):', data.asset_ids);
-            }},
+            // Both persist server-side and arrive with the resulting layer_z
+            // (adopted by the handler wrapper below); the live stack is
+            // simply rebuilt from it, so it can't take a different path
+            // than the DB did.
+            move_layer(data) {{ restackAll(); }},
+            reorder_assets(data) {{ restackAll(); }},
         }};
+
+        // Adopt the server's z map BEFORE any handler runs: an add then
+        // slots against current numbers, and reorders/moves/deletes restack
+        // from them.
+        for (const name of Object.keys(handlers)) {{
+            const orig = handlers[name];
+            handlers[name] = function (data) {{
+                if (data && data.layer_z) adoptLayerZ(data.layer_z);
+                return orig.apply(this, arguments);
+            }};
+        }}
 
         // ─── Save/restore around map.setStyle() (vector basemap support) ───
         // setStyle() wipes every source and layer, including user-drawn
@@ -2681,6 +2650,10 @@ async def serve_map(map_id: str, request: Request):
             // Replace the presentation cache with persisted snapshot values.
             for (const id of Object.keys(assetInfo)) delete assetInfo[id];
             for (const asset of (snapshot.assets || [])) rememberAsset(asset);
+            // The snapshot's z_index values are the stored order.
+            const snapZ = {{}};
+            for (const asset of (snapshot.assets || [])) snapZ[asset.asset_id] = asset.z_index ?? 0;
+            latestLayerZ = snapZ;
             // Restore all assets
             for (const asset of (snapshot.assets || [])) {{
                 if (asset.asset_type && asset.asset_type.startsWith('geotiff_')) {{
@@ -2695,7 +2668,10 @@ async def serve_map(map_id: str, request: Request):
                     // persisted stack exactly, INCLUDING user reorders that
                     // put a raster above vectors (the old below-all-vectors
                     // heuristic silently undid those on every reconnect).
-                    addImageOverlay(asset.asset_id, imageUrl, bounds, 1.0, asset.visible, asset.name, asset.asset_type, asset.z_index);
+                    addImageOverlay(asset.asset_id, imageUrl, bounds, asset.style || {{}}, asset.visible, asset.name, asset.asset_type, asset.z_index);
+                }} else if (asset.asset_type === 'tile_layer') {{
+                    addTileLayer({{ asset_id: asset.asset_id, url: asset.source_url, name: asset.name,
+                        style: asset.style || {{}}, visible: asset.visible, z_index: asset.z_index }});
                 }} else if (asset.asset_type === 'arc') {{
                     // 3D deck arc: endpoints recovered from the stored
                     // FeatureCollection's Point features inside addArc.
@@ -2706,7 +2682,11 @@ async def serve_map(map_id: str, request: Request):
                     addGeoJSON(asset.asset_id, asset.geojson, asset.style, asset.visible, asset.name, asset.asset_type, asset.z_index);
                 }}
             }}
-            window.dispatchEvent(new CustomEvent('esip:assetschanged', {{ detail: {{ type: 'snapshot' }} }}));
+            // Tell the embedding page too (a reload/reconnect can change any
+            // asset), not only same-window listeners.
+            const esipEmit = window.ESIPMap && window.ESIPMap.actions && window.ESIPMap.actions.emit;
+            if (esipEmit) esipEmit('assetschanged', {{ type: 'snapshot' }});
+            else window.dispatchEvent(new CustomEvent('esip:assetschanged', {{ detail: {{ type: 'snapshot' }} }}));
             // Restore basemap — ONLY when it actually differs, and always
             // through the kind-aware set_basemap handler. Snapshots arrive on
             // every WS (re)connect, so this path must be a no-op when nothing

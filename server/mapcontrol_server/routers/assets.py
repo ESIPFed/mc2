@@ -42,10 +42,12 @@ async def update_asset(map_id: str, asset_id: str, update: AssetUpdate):
     asset = await asset_service.update_asset(map_id, asset_id, update)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    await manager.broadcast_to_map(map_id, {
-        "type": "asset_updated",
-        "data": asset.model_dump(),
-    })
+    # The complete stored asset (style merged, not replaced), minus the
+    # geometry, which PATCH cannot change and can be many MB.
+    data = asset.model_dump(exclude={"geojson"})
+    data["style"] = asset.style.model_dump(exclude_none=True) if asset.style else {}
+    data["full"] = True
+    await manager.broadcast_to_map(map_id, {"type": "asset_updated", "data": data})
     return asset
 
 
@@ -57,5 +59,5 @@ async def delete_asset(map_id: str, asset_id: str):
         raise HTTPException(status_code=404, detail="Asset not found")
     await manager.broadcast_to_map(map_id, {
         "type": "delete_asset",
-        "data": {"asset_id": asset_id},
+        "data": {"asset_id": asset_id, "layer_z": await asset_service.layer_z(map_id)},
     })

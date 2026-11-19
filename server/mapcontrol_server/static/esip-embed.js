@@ -326,7 +326,9 @@
     clear(container);
 
     var buckets = { analysis: [], drawn: [], basemap: [] };
-    assetCache.forEach(function (a) { buckets[groupForType(a.asset_type)].push(a); });
+    // The asset list arrives bottom-most first; list top-most first so the
+    // top row is the layer drawn on top.
+    assetCache.slice().reverse().forEach(function (a) { buckets[groupForType(a.asset_type)].push(a); });
 
     GROUPS.forEach(function (g) {
       if (g.key === "basemap") { container.appendChild(renderBasemapGroup()); return; }
@@ -412,7 +414,9 @@
     var opRow = el("div", "esip-opacity-row");
     opRow.appendChild(el("label", null, "Opacity"));
     var slider = el("input");
-    slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.value = "100";
+    // Seeded from the stored opacity (set_opacity persists it now).
+    var stored = asset.style && typeof asset.style.opacity === "number" ? asset.style.opacity : 1;
+    slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.value = String(Math.round(stored * 100));
     slider.addEventListener("input", function () {
       M.actions.setOpacity(asset.asset_id, Number(slider.value) / 100);
     });

@@ -51,7 +51,7 @@ RASTERS & TILES
     session.remove_tile_layer(asset_id)
 
 STYLE dict keys (all optional)
-    fill_color: "#43b4e440"        # 8-digit hex -> translucent fill
+    fill_color: "#43b4e440"        # 8-digit hex: the last byte IS the drawn alpha (0x40 = 25%)
     stroke_color: "#43b4e4", stroke_width: 3
     line_dash: [3, 2]              # dashed outline
     label: True                    # show feature's "name"  (or a string for custom text)
@@ -60,6 +60,8 @@ STYLE dict keys (all optional)
     glow: True                     # pulse to draw attention (or {"period": 2.5})
     mask: True                     # spotlight: darken everything OUTSIDE the polygon
                                    # (or {"color": "#000000", "opacity": 0.6}); polygons only
+    opacity: 0.6                   # whole-layer opacity, multiplies the colour alphas;
+                                   # same value set_opacity() stores (rasters: alpha=)
 
 CAMERA
     session.zoom_to_point(lon, lat, zoom=12)
@@ -74,10 +76,13 @@ LOOK
     session.set_theme("dark")                 # "dark" | "light" | "auto"
 
 LAYER MANAGEMENT (use the asset_id you kept from add_* calls)
-    session.update_style(asset_id, style={...})
+    session.update_style(asset_id, style={...})    # MERGED: unsent keys are kept
     session.set_visibility(asset_id, visible=False)
-    session.set_opacity(asset_id, 0.5)
-    session.move_layer(asset_id, position="top")   # or "bottom"
+    session.set_opacity(asset_id, 0.5)             # stored as style.opacity
+    session.move_layer(asset_id, position="top")   # or "bottom" / "up" / "down"
+    session.reorder_assets([top_id, ..., bottom_id])
+    # Stacking: rasters/tiles are inserted below every vector, vectors on top,
+    # whatever order you add them in. Reorder explicitly when you need otherwise.
     session.delete_asset(asset_id)
     session.list_assets()                     # inventory everything on the map
 

@@ -12,7 +12,8 @@ import tempfile
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from mapcontrol_server.main import app, lifespan
+from mapcontrol_server.main import app
+from tests._harness import db_lifespan as lifespan
 
 SAMPLE_GEOJSON = '{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-97.7,30.2],[-97.7,30.3],[-97.6,30.3],[-97.6,30.2],[-97.7,30.2]]]},"properties":{}}'
 
@@ -93,7 +94,7 @@ async def test_reorder_assets_persists(client, map_id):
         "type": "reorder_assets",
         "data": {"asset_ids": [t, b, a]},
     })
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     assert await _order(client, map_id) == [a, b, t]
 
 
@@ -119,7 +120,7 @@ async def test_move_layer_persists(client, map_id):
         "type": "move_layer",
         "data": {"asset_id": a, "position": "top"},
     })
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     assert await _order(client, map_id) == [b, c, a]
 
     await client.post(f"/api/maps/{map_id}/events", json={

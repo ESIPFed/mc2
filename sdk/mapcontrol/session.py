@@ -418,7 +418,14 @@ class MapSession:
         return self._send_event("set_visibility", {"asset_id": asset_id, "visible": visible})
 
     def update_style(self, asset_id: str, style: Style | dict) -> EventResult:
-        """Update the style of an asset."""
+        """Change part of an asset's style.
+
+        The update is MERGED into the stored style: keys you pass replace the
+        stored ones, keys you leave out are kept, and an explicit ``None`` in a
+        dict clears that key back to the renderer default. So
+        ``update_style(id, {"status": "done"})`` keeps the asset's own fill
+        and label.
+        """
         style_dict = style.to_dict() if isinstance(style, Style) else style
         return self._send_event("update_style", {"asset_id": asset_id, "style": style_dict})
 
@@ -466,6 +473,11 @@ class MapSession:
     def set_opacity(self, asset_id: str, opacity: float) -> EventResult:
         """Set the opacity of any asset (vector, raster, or tile layer).
 
+        Stored as the asset's ``style.opacity`` (so it survives reloads and
+        layer managers can read it back). It multiplies everything the asset
+        draws: a fill colour's own alpha byte is kept, so ``#ff000080`` at
+        opacity 0.5 draws at 25%.
+
         Args:
             asset_id: The asset to change opacity for.
             opacity: Opacity value (0.0 = transparent, 1.0 = opaque).
@@ -488,6 +500,11 @@ class MapSession:
             "asset_id": asset_id,
             "position": position,
         })
+
+    def reorder_assets(self, asset_ids: list[str]) -> EventResult:
+        """Set the stacking order. ``asset_ids`` is TOP-most first; any asset
+        you leave out keeps its relative order below the listed ones."""
+        return self._send_event("reorder_assets", {"asset_ids": list(asset_ids)})
 
     # ─── Basemap ─────────────────────────────────────────────────────────────
 
@@ -734,6 +751,9 @@ class MapSession:
                 color_by=s.get("color_by"),
                 glow=s.get("glow"),
                 mask=s.get("mask"),
+                opacity=s.get("opacity"),
+                animate=s.get("animate"),
+                status=s.get("status"),
             )
         metadata = None
         if data.get("metadata"):
@@ -753,6 +773,8 @@ class MapSession:
             metadata=metadata,
             visible=data.get("visible", True),
             animated=data.get("animated", False),
+            z_index=data.get("z_index") or 0,
+            bbox=data.get("bbox"),
             source_url=data.get("source_url"),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),

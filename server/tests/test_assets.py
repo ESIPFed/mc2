@@ -6,7 +6,8 @@ import tempfile
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from mapcontrol_server.main import app, lifespan
+from mapcontrol_server.main import app
+from tests._harness import db_lifespan as lifespan
 
 SAMPLE_GEOJSON = '{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-97.7,30.2],[-97.7,30.3],[-97.6,30.3],[-97.6,30.2],[-97.7,30.2]]]},"properties":{}}'
 
@@ -117,7 +118,7 @@ async def test_add_polygon_mask_style_roundtrip(client, mask):
             "style": {"stroke_color": "#ffffff", "stroke_width": 3, "mask": mask},
         }
     })
-    assert event_resp.status_code == 200
+    assert event_resp.status_code == 201
     asset_id = event_resp.json()["asset_id"]
 
     resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
@@ -133,7 +134,7 @@ async def test_update_style_mask_toggle(client, map_with_asset):
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"mask": True}},
     })
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
     assert resp.json()["style"]["mask"] is True
 
@@ -141,7 +142,7 @@ async def test_update_style_mask_toggle(client, map_with_asset):
         "type": "update_style",
         "data": {"asset_id": asset_id, "style": {"mask": False}},
     })
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     resp = await client.get(f"/api/maps/{map_id}/assets/{asset_id}")
     assert resp.json()["style"]["mask"] is False
 

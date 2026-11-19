@@ -6,7 +6,8 @@ import tempfile
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from mapcontrol_server.main import app, lifespan
+from mapcontrol_server.main import app
+from tests._harness import db_lifespan as lifespan
 
 DRAWN_POLYGON_GEOJSON = '{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-97.7,30.2],[-97.7,30.3],[-97.6,30.3],[-97.6,30.2],[-97.7,30.2]]]},"properties":{}}'
 DRAWN_BOX_GEOJSON = '{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-97.8,30.1],[-97.8,30.4],[-97.5,30.4],[-97.5,30.1],[-97.8,30.1]]]},"properties":{}}'
