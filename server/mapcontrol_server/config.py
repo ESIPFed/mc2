@@ -94,6 +94,12 @@ class GeoTIFFConfig:
     )
 
 
+@dataclass
+class VideoConfig:
+    # Per-file cap for add_video downloads (each of the 1..3 encodings).
+    max_file_size_mb: int = 100
+
+
 def _default_basemaps() -> dict[str, BasemapEntry]:
     return {
         "osm": BasemapEntry(
@@ -151,6 +157,7 @@ class AppConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     map: MapConfig = field(default_factory=MapConfig)
     geotiff: GeoTIFFConfig = field(default_factory=GeoTIFFConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
 
 
 def _merge_dict(dc_instance, data: dict):

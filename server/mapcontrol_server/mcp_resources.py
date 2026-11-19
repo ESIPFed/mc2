@@ -311,8 +311,14 @@ async def res_raster(map_id: str, asset_id: str) -> bytes:
             f"Asset '{asset_id}' is a '{asset.asset_type}', not a GeoTIFF raster. "
             f"Its GeoJSON lives at {asset_uri(map_id, asset_id)}."
         )
-    # geotiff_service renders overlays to file_dir/{asset_id}.png.
+    # geotiff_service renders overlays to file_dir/{asset_id}.png (a frame
+    # stack's first frame; a video's poster, when one was given).
     path = _safe_file(f"{asset_id}.png")
+    if not path.exists() and asset.asset_type == "geotiff_video":
+        raise ValueError(
+            f"Video overlay '{asset_id}' has no still image (no poster_url was "
+            "given). Its footprint is the asset's GeoJSON."
+        )
     if not path.exists():
         raise ValueError(
             f"Rendered PNG for raster '{asset_id}' is not on disk (it may have "

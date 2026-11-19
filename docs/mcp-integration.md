@@ -313,6 +313,7 @@ Once connected, the AI assistant will have access to these tools:
 | `get_viewport` | Get current map center/zoom/bbox |
 | `add_geotiff_rgb` | Add RGB GeoTIFF overlay from URL |
 | `add_geotiff_singleband` | Add single-band GeoTIFF with colormap |
+| `add_animation` | Animated raster with play/pause: GeoTIFF frame stack (`kind='frames'`, fixed vmin/vmax) or a WebM/MP4 video placed by bounds (`kind='video'`) |
 | `upload_geotiff` | Upload GeoTIFF from local file/base64 |
 | `take_screenshot` | Capture map as PNG |
 | `list_drawn_assets` | List user-drawn shapes |

@@ -681,6 +681,86 @@ async def add_geotiff(
 
 
 @mcp_server.tool(
+    annotations=ToolAnnotations(
+        title="Add Animation",
+        readOnlyHint=False,
+        idempotentHint=False,
+        openWorldHint=True,  # fetches frames / video files from URLs
+    ),
+)
+async def add_animation(
+    map_id: str,
+    kind: Literal["frames", "video"],
+    urls: list[str],
+    name: str | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    colormap: str = "viridis",
+    band: int = 1,
+    nodata: float | None = None,
+    fps: float = 4.0,
+    labels: list[str] | None = None,
+    bounds: list[float] | None = None,
+    poster_url: str | None = None,
+    alpha: float = 1.0,
+    loop: bool = True,
+    autoplay: bool = True,
+) -> CallToolResult:
+    """Overlay an animated raster that viewers play/pause on the map.
+
+    - kind='frames': `urls` are 2..240 single-band GeoTIFFs (play order, one
+      shared grid), rendered with ONE fixed `vmin`/`vmax` (required) and a
+      matplotlib `colormap`. `fps` 0.25..30; optional `labels` (one per
+      frame, <= 80 chars, e.g. dates) show beside the play button.
+    - kind='video': `urls` are 1..3 encodings of one pre-encoded clip in
+      browser preference order (WebM VP9-with-alpha, then H.264 MP4), placed
+      by `bounds` = [west, south, east, north] (EPSG:4326, Web-Mercator
+      gridded video; east may exceed 180 across the antimeridian). Optional
+      `poster_url` (PNG/JPEG first frame) becomes the thumbnail.
+
+    Play/pause only; play state is per viewer. `alpha` is the layer opacity.
+    """
+    await _require_map(map_id)
+    data: dict[str, Any] = {"urls": urls, "alpha": alpha, "loop": loop, "autoplay": autoplay}
+    if name:
+        data["name"] = name
+    if kind == "frames":
+        event_type = "add_geotiff_frames"
+        data.update({"vmin": vmin, "vmax": vmax, "colormap": colormap, "band": band, "fps": fps})
+        if labels is not None:
+            data["labels"] = labels
+        if nodata is not None:
+            data["nodata"] = nodata
+    else:
+        event_type = "add_video"
+        if bounds is None:
+            raise ValueError("kind='video' requires bounds=[west, south, east, north].")
+        data["bounds"] = bounds
+        if poster_url:
+            data["poster_url"] = poster_url
+
+    result = await event_service.process_event(map_id, MapEvent(type=event_type, data=data))
+    if result.error:
+        raise ValueError(result.error)
+    structured = {
+        "event_id": result.event_id,
+        "asset_id": result.asset_id,
+        "kind": kind,
+        "created_at": result.created_at,
+        "resource_uri": asset_uri(map_id, result.asset_id) if result.asset_id else None,
+    }
+    extra = []
+    if result.asset_id:
+        extra.append(_resource_link(
+            asset_uri(map_id, result.asset_id),
+            name=f"{name or 'animation'}-footprint",
+            mime_type="application/geo+json",
+            description="Geographic footprint polygon of the animation (EPSG:4326).",
+        ))
+    return _tool_result(structured, *extra)
+
+
+@mcp_server.tool(
     annotations=ToolAnnotations(title="Zoom", readOnlyHint=False, idempotentHint=True),
 )
 async def zoom(

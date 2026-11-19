@@ -29,7 +29,7 @@ router = APIRouter(tags=["files"])
 
 @router.get("/api/files/{filename}")
 async def serve_file(filename: str):
-    """Serve a rendered file (e.g., GeoTIFF PNG) from the file storage directory."""
+    """Serve a rendered file (GeoTIFF PNG, animation frame, video) from the file storage directory."""
     config = load_config()
     file_dir = Path(config.storage.file_dir)
     file_path = file_dir / filename
@@ -52,9 +52,13 @@ async def serve_file(filename: str):
         ".tif": "image/tiff",
         ".tiff": "image/tiff",
         ".json": "application/json",
+        ".webm": "video/webm",
+        ".mp4": "video/mp4",
     }
     media_type = content_types.get(suffix, "application/octet-stream")
 
+    # FileResponse answers Range requests (206 Partial Content), which video
+    # playback needs (Safari refuses to play a video served without it).
     return FileResponse(
         str(file_path),
         media_type=media_type,

@@ -744,6 +744,61 @@ async def serve_map(map_id: str, request: Request):
             overflow: hidden;
             text-overflow: ellipsis;
         }}
+        /* ─── Animated rasters: play/pause rows (frame stacks + video) ───
+           Bottom-left, one compact pill per shown animation. Play/pause only
+           by design: no scrubbing, no speed, no timeline. */
+        .anim-controls {{
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--eo-text);
+            pointer-events: none;
+        }}
+        .anim-row {{
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            max-width: min(360px, calc(100vw - 20px));
+            padding: 3px 10px 3px 3px;
+            background: var(--eo-surface);
+            border: 1px solid var(--eo-border);
+            border-radius: 999px;
+            box-shadow: var(--eo-shadow);
+        }}
+        .anim-row button {{
+            width: 26px;
+            height: 26px;
+            flex-shrink: 0;
+            border: none;
+            border-radius: 50%;
+            background: var(--eo-accent-soft);
+            color: var(--eo-accent);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .anim-row button:hover {{ background: var(--eo-accent); color: #fff; }}
+        .anim-row button svg {{ width: 12px; height: 12px; display: block; }}
+        .anim-name {{
+            font-weight: 500;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .anim-frame {{
+            color: var(--eo-text-muted);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }}
     </style>
 </head>
 <body>
@@ -2045,31 +2100,29 @@ async def serve_map(map_id: str, request: Request):
             raiseDrawLayers();
         }}
 
-        async function addImageOverlay(assetId, imageUrl, bounds, style, visible, name, assetType, zIndex) {{
-            // bounds = [minLon, minLat, maxLon, maxLat]
-            const fullUrl = imageUrl.startsWith('http') ? imageUrl : BASE_URL + imageUrl;
+        // ─── Raster overlay placement (GeoTIFF, frame stack, video) ───
+        // One raster layer over an image/video source, slotted per the
+        // server's canonical z_index and registered like every GeoTIFF.
+        function boundsToCoords(bounds) {{
+            // MapLibre anchors an image/video source on the tile under its
+            // centre and throws for a centre past 180°. A box crossing the
+            // antimeridian (east > 180) is drawn on the world copy to the
+            // west instead: the same place on the globe.
+            const w = (bounds[0] + bounds[2]) / 2 >= 180 ? bounds[0] - 360 : bounds[0];
+            const e = w + (bounds[2] - bounds[0]);
+            return [
+                [w, bounds[3]],  // top-left
+                [e, bounds[3]],  // top-right
+                [e, bounds[1]],  // bottom-right
+                [w, bounds[1]],  // bottom-left
+            ];
+        }}
+        function placeRasterOverlay(assetId, sourceSpec, bounds, style, visible, name, assetType, zIndex) {{
             const srcId = 'src-' + assetId;
             const layerId = 'img-' + assetId;
-            const coords = [
-                [bounds[0], bounds[3]],  // top-left
-                [bounds[2], bounds[3]],  // top-right
-                [bounds[2], bounds[1]],  // bottom-right
-                [bounds[0], bounds[1]],  // bottom-left
-            ];
-            // Fetch image as blob URL to prevent canvas tainting
-            // (HTTP URLs can taint the WebGL canvas, making toDataURL return blank)
-            let imgSrc = fullUrl;
-            try {{
-                const resp = await fetch(fullUrl);
-                const blob = await resp.blob();
-                imgSrc = URL.createObjectURL(blob);
-                console.log('[GeoTIFF] Loaded as blob URL:', imgSrc, '(' + Math.round(blob.size/1024) + ' KB)');
-            }} catch (e) {{
-                console.warn('[GeoTIFF] Blob fetch failed, using direct URL:', e.message);
-            }}
-            map.addSource(srcId, {{ type: 'image', url: imgSrc, coordinates: coords }});
-            // The image fetch above is async: by now later broadcasts may
-            // have moved the stack, so take the z from the newest layer_z.
+            map.addSource(srcId, sourceSpec);
+            // Callers load asynchronously: by now later broadcasts may have
+            // moved the stack, so take the z from the newest layer_z.
             zIndex = zFor(assetId, zIndex);
             // Slot per the server's canonical z_index; a legacy broadcast
             // without one falls back to "below all vectors" (the same rule
@@ -2081,9 +2134,295 @@ async def serve_map(map_id: str, request: Request):
                 paint: {{ 'raster-opacity': styleOpacity(style) }},
                 layout: {{ visibility: visible !== false ? 'visible' : 'none' }},
             }}, beforeId);
+            // East may exceed 180 (a video crossing the antimeridian): kept
+            // as is, so zoom-to-fit frames one contiguous overlay.
             const b = new maplibregl.LngLatBounds([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
             assetRegistry[assetId] = {{ layerIds: [layerId], bounds: b, srcId, name: name || null, asset_type: assetType || 'geotiff', zIndex, visible: visible !== false, metadata: assetInfo[assetId]?.metadata, style: style || {{}} }};
             raiseDrawLayers();
+        }}
+
+        async function addImageOverlay(assetId, imageUrl, bounds, style, visible, name, assetType, zIndex) {{
+            // bounds = [minLon, minLat, maxLon, maxLat]
+            const fullUrl = imageUrl.startsWith('http') ? imageUrl : BASE_URL + imageUrl;
+            // Fetch image as blob URL to prevent canvas tainting
+            // (HTTP URLs can taint the WebGL canvas, making toDataURL return blank)
+            let imgSrc = fullUrl;
+            try {{
+                const resp = await fetch(fullUrl);
+                const blob = await resp.blob();
+                imgSrc = URL.createObjectURL(blob);
+                console.log('[GeoTIFF] Loaded as blob URL:', imgSrc, '(' + Math.round(blob.size/1024) + ' KB)');
+            }} catch (e) {{
+                console.warn('[GeoTIFF] Blob fetch failed, using direct URL:', e.message);
+            }}
+            placeRasterOverlay(assetId, {{ type: 'image', url: imgSrc, coordinates: boundsToCoords(bounds) }},
+                bounds, style, visible, name, assetType, zIndex);
+        }}
+
+        // ─── Animated rasters: frame stacks + video overlays ───
+        // Play/pause only: no scrubbing, no timeline, no shared clock. Play
+        // state is per viewer (never broadcast, never persisted). Headless
+        // screenshots (?animate=0, or window.__ESIP_STILL_FRAME set before
+        // load) hold every animation paused on its first frame, so a capture
+        // is deterministic; the control is not drawn there either.
+        const STILL_FRAME = new URLSearchParams(window.location.search).get('animate') === '0'
+            || window.__ESIP_STILL_FRAME === true;
+        const animLayers = {{}};   // asset_id -> playback state
+        let animEpoch = 0;       // bumped by snapshot teardown: stale async loads bail
+        function revokeBlob(u) {{
+            if (u && u.startsWith('blob:')) {{
+                try {{ URL.revokeObjectURL(u); }} catch (e) {{}}
+            }}
+        }}
+        // Same-origin blob URLs keep the WebGL canvas untainted (screenshots
+        // use toDataURL); falls back to the direct URL on a fetch failure.
+        async function fetchBlobUrl(url) {{
+            const fullUrl = url.startsWith('http') ? url : BASE_URL + url;
+            try {{
+                const resp = await fetch(fullUrl);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return URL.createObjectURL(await resp.blob());
+            }} catch (e) {{
+                console.warn('[anim] blob fetch failed, using direct URL:', e.message);
+                return fullUrl;
+            }}
+        }}
+        function animLayerShown(assetId) {{
+            return !!map.getLayer('img-' + assetId)
+                && map.getLayoutProperty('img-' + assetId, 'visibility') !== 'none';
+        }}
+        // Advance only while playing, shown, and the page is visible.
+        function animActive(st) {{
+            return st.playing && !document.hidden && animLayerShown(st.assetId);
+        }}
+        function syncAnim(st) {{
+            if (st.kind === 'frames') {{
+                const want = animActive(st) && st.loaded;
+                if (want && !st.timer) st.timer = setInterval(() => stepFrames(st), 1000 / st.fps);
+                else if (!want && st.timer) {{ clearInterval(st.timer); st.timer = null; }}
+            }} else if (st.video) {{
+                const v = st.video;
+                if (animActive(st)) {{
+                    if (v.paused) {{
+                        const p = v.play();
+                        if (p && p.catch) p.catch(() => {{}});
+                    }}
+                }} else if (!v.paused) v.pause();
+            }}
+        }}
+        function showFrame(st, i) {{
+            const src = map.getSource('src-' + st.assetId);
+            if (!src || !st.frames[i]) return;
+            st.frame = i;
+            // updateImage keeps the old texture until the new image is
+            // decoded: no flicker, and no layer churn per frame.
+            src.updateImage({{ url: st.frames[i], coordinates: st.coords }});
+            updateAnimControl(st);
+        }}
+        function stepFrames(st) {{
+            let i = st.frame + 1;
+            if (i >= st.total) {{
+                if (!st.loop) {{
+                    st.playing = false;
+                    syncAnim(st);
+                    renderAnimControls();
+                    return;
+                }}
+                i = 0;
+            }}
+            showFrame(st, i);
+        }}
+        function toggleAnim(assetId) {{
+            const st = animLayers[assetId];
+            if (!st) return;
+            st.playing = !st.playing;
+            // A finished non-looping stack starts over (a video restarts by itself).
+            if (st.playing && st.kind === 'frames' && st.frame >= st.total - 1) showFrame(st, 0);
+            syncAnim(st);
+            renderAnimControls();
+        }}
+        function teardownAnim(assetId) {{
+            const st = animLayers[assetId];
+            if (!st) return;
+            delete animLayers[assetId];
+            if (st.timer) clearInterval(st.timer);
+            if (st.video) {{ try {{ st.video.pause(); }} catch (e) {{}} }}
+            // Revoke later: a frame load may still be in flight.
+            if (st.frames) setTimeout(() => st.frames.forEach(revokeBlob), 2000);
+            renderAnimControls();
+        }}
+        function teardownAllAnims() {{
+            animEpoch++;
+            for (const id of Object.keys(animLayers)) teardownAnim(id);
+        }}
+
+        async function addFrameStack(assetId, anim, style, visible, name, zIndex) {{
+            const urls = (anim && anim.frame_urls) || [];
+            if (!urls.length || animLayers[assetId] || map.getSource('src-' + assetId)) return;
+            const epoch = animEpoch;
+            const st = animLayers[assetId] = {{
+                kind: 'frames', assetId, name: name || null, total: urls.length,
+                frames: new Array(urls.length).fill(null),
+                labels: Array.isArray(anim.labels) ? anim.labels : null,
+                fps: Math.min(30, Math.max(0.25, Number(anim.fps) || 4)),
+                loop: anim.loop !== false,
+                playing: anim.autoplay !== false && !STILL_FRAME,
+                frame: 0, timer: null, ready: false, loaded: false,
+                coords: boundsToCoords(anim.bounds),
+            }};
+            const first = await fetchBlobUrl(urls[0]);
+            if (epoch !== animEpoch || animLayers[assetId] !== st) {{ revokeBlob(first); return; }}
+            st.frames[0] = first;
+            placeRasterOverlay(assetId, {{ type: 'image', url: first, coordinates: st.coords }},
+                anim.bounds, style, visible, name, 'geotiff_frames', zIndex);
+            st.ready = true;
+            renderAnimControls();
+            // Preload every frame (a few at a time) before playback starts, so
+            // the loop never waits on the network.
+            let next = 1;
+            const worker = async () => {{
+                while (next < urls.length) {{
+                    const i = next++;
+                    const u = await fetchBlobUrl(urls[i]);
+                    if (animLayers[assetId] !== st) {{ revokeBlob(u); return; }}
+                    st.frames[i] = u;
+                }}
+            }};
+            await Promise.all([worker(), worker(), worker(), worker()]);
+            if (animLayers[assetId] !== st) return;
+            st.loaded = true;
+            syncAnim(st);
+        }}
+
+        function addVideoOverlay(assetId, anim, style, visible, name, zIndex) {{
+            const urls = ((anim && anim.video_urls) || []).map(u => u.startsWith('http') ? u : BASE_URL + u);
+            if (!urls.length || animLayers[assetId] || map.getSource('src-' + assetId)) return;
+            const st = animLayers[assetId] = {{
+                kind: 'video', assetId, name: name || null, loop: anim.loop !== false,
+                playing: anim.autoplay !== false && !STILL_FRAME, video: null, ready: true,
+            }};
+            // Browser picks the first playable URL (e.g. VP9+alpha WebM, then
+            // H.264 MP4). Served same-origin, so the canvas stays untainted.
+            placeRasterOverlay(assetId, {{ type: 'video', urls, coordinates: boundsToCoords(anim.bounds) }},
+                anim.bounds, style, visible, name, 'geotiff_video', zIndex);
+            attachVideo(st);
+            renderAnimControls();
+        }}
+        // MapLibre creates the <video> asynchronously (and again after a
+        // style rebuild), always looping and playing. Take it over once it
+        // exists: our loop flag, our play state, still-frame mode.
+        function attachVideo(st) {{
+            const tryAttach = () => {{
+                if (animLayers[st.assetId] !== st) return true;
+                const src = map.getSource('src-' + st.assetId);
+                const v = src && src.getVideo && src.getVideo();
+                if (!v) return false;
+                if (v === st.video) return true;
+                st.video = v;
+                v.muted = true;
+                v.playsInline = true;
+                v.loop = st.loop;
+                v.addEventListener('ended', () => {{
+                    if (st.video === v && !v.loop) {{ st.playing = false; renderAnimControls(); }}
+                }});
+                // MapLibre only redraws a video continuously while it plays:
+                // repaint once a paused frame is decoded.
+                v.addEventListener('loadeddata', () => map.triggerRepaint());
+                v.addEventListener('seeked', () => map.triggerRepaint());
+                const settle = () => {{
+                    if (st.video !== v) return;
+                    if (!st.playing) {{
+                        v.pause();
+                        try {{ v.currentTime = 0; }} catch (e) {{}}
+                    }}
+                    syncAnim(st);
+                }};
+                // MapLibre has just called play(): pausing before playback
+                // starts rejects its promise (an uncaught error), so a video
+                // that must hold still is stopped once it actually plays.
+                if (!v.paused && !animActive(st)) v.addEventListener('playing', settle, {{ once: true }});
+                else settle();
+                return true;
+            }};
+            if (tryAttach()) return;
+            const onData = () => {{ if (tryAttach()) map.off('sourcedata', onData); }};
+            map.on('sourcedata', onData);
+        }}
+
+        // ─── Play/pause control: one compact row per shown animation ───
+        let animControlsEl = null;
+        const ANIM_ICON_PLAY = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor"/></svg>';
+        const ANIM_ICON_PAUSE = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5h2.5v9H2.5zM7 1.5h2.5v9H7z" fill="currentColor"/></svg>';
+        function animFrameText(st) {{
+            if (st.kind !== 'frames') return '';
+            const label = st.labels && st.labels[st.frame];
+            return (st.frame + 1) + '/' + st.total + (label ? ' · ' + label : '');
+        }}
+        function updateAnimControl(st) {{
+            if (st.frameEl) st.frameEl.textContent = animFrameText(st);
+        }}
+        function renderAnimControls() {{
+            if (!animControlsEl) {{
+                animControlsEl = document.createElement('div');
+                animControlsEl.className = 'anim-controls';
+                map.getContainer().appendChild(animControlsEl);
+            }}
+            const shown = STILL_FRAME ? [] : Object.values(animLayers)
+                .filter(st => st.ready && animLayerShown(st.assetId))
+                .sort((a, b) => ((assetRegistry[b.assetId] || {{}}).zIndex ?? 0) - ((assetRegistry[a.assetId] || {{}}).zIndex ?? 0));
+            animControlsEl.replaceChildren();
+            for (const st of Object.values(animLayers)) {{ st.frameEl = null; }}
+            for (const st of shown) {{
+                const row = document.createElement('div');
+                row.className = 'anim-row';
+                row.dataset.assetId = st.assetId;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.innerHTML = st.playing ? ANIM_ICON_PAUSE : ANIM_ICON_PLAY;
+                btn.setAttribute('aria-label', (st.playing ? 'Pause ' : 'Play ') + (st.name || 'animation'));
+                btn.title = st.playing ? 'Pause' : 'Play';
+                btn.addEventListener('click', (e) => {{ e.stopPropagation(); toggleAnim(st.assetId); }});
+                const nameEl = document.createElement('span');
+                nameEl.className = 'anim-name';
+                nameEl.textContent = (assetRegistry[st.assetId] || {{}}).name || st.name || 'Animation';
+                row.append(btn, nameEl);
+                if (st.kind === 'frames') {{
+                    st.frameEl = document.createElement('span');
+                    st.frameEl.className = 'anim-frame';
+                    st.frameEl.textContent = animFrameText(st);
+                    row.append(st.frameEl);
+                }}
+                animControlsEl.append(row);
+            }}
+            animControlsEl.style.display = shown.length ? '' : 'none';
+        }}
+        document.addEventListener('visibilitychange', () => {{
+            for (const st of Object.values(animLayers)) syncAnim(st);
+        }});
+        // A playing video keeps MapLibre rendering forever: 'idle' never
+        // fires and map.loaded() stays false. Waiters use the next drawn
+        // frame instead while one plays.
+        function onceSettled(cb) {{
+            const busy = Object.values(animLayers).some(st => st.video && !st.video.paused);
+            if (busy) {{ map.once('render', cb); map.triggerRepaint(); }}
+            else map.once('idle', cb);
+        }}
+        function animationsReady() {{
+            return Object.values(animLayers).every(st => st.kind === 'frames'
+                ? st.ready
+                : (!animLayerShown(st.assetId) || (st.video && st.video.readyState >= 2)));
+        }}
+        function animationState() {{
+            const out = {{}};
+            for (const [id, st] of Object.entries(animLayers)) {{
+                out[id] = st.kind === 'frames'
+                    ? {{ kind: 'frames', playing: st.playing, frame: st.frame, total: st.total, loaded: st.loaded, running: !!st.timer }}
+                    : {{ kind: 'video', playing: st.playing, paused: st.video ? st.video.paused : null,
+                        currentTime: st.video ? st.video.currentTime : null, loop: st.video ? st.video.loop : null,
+                        readyState: st.video ? st.video.readyState : null,
+                        src: st.video ? st.video.currentSrc : null }};
+            }}
+            return out;
         }}
 
         // ─── deck.gl overlay: true 3D arcs (sketch 003 → deck ArcLayer) ───
@@ -2323,6 +2662,7 @@ async def serve_map(map_id: str, request: Request):
                     delete assetRegistry[data.asset_id];
                     if (hadMask) rebuildMask();
                 }}
+                teardownAnim(data.asset_id);
                 if (deckArcs[data.asset_id]) {{
                     delete deckArcs[data.asset_id];
                     renderDeckArcs();
@@ -2338,6 +2678,11 @@ async def serve_map(map_id: str, request: Request):
                     }}
                     // Hidden masked assets drop out of the shared mask.
                     if (reg.mask) rebuildMask();
+                }}
+                // Hidden animations stop advancing and lose their control.
+                if (animLayers[data.asset_id]) {{
+                    syncAnim(animLayers[data.asset_id]);
+                    renderAnimControls();
                 }}
                 if (deckArcs[data.asset_id]) {{
                     deckArcs[data.asset_id].visible = data.visible !== false;
@@ -2475,6 +2820,17 @@ async def serve_map(map_id: str, request: Request):
             }},
             add_geotiff_singleband(data) {{
                 addImageOverlay(data.asset_id, data.image_url, data.bounds, data.style || {{ opacity: data.alpha ?? 1 }}, data.visible, data.name, 'geotiff_singleband', data.z_index);
+            }},
+            // Animated rasters (play/pause only; play state stays local)
+            add_geotiff_frames(data) {{
+                addFrameStack(data.asset_id, {{ frame_urls: data.frame_urls, fps: data.fps, labels: data.labels,
+                    loop: data.loop, autoplay: data.autoplay, bounds: data.bounds }},
+                    data.style || {{ opacity: data.alpha ?? 1 }}, data.visible, data.name, data.z_index);
+            }},
+            add_video(data) {{
+                addVideoOverlay(data.asset_id, {{ video_urls: data.video_urls, loop: data.loop,
+                    autoplay: data.autoplay, bounds: data.bounds }},
+                    data.style || {{ opacity: data.alpha ?? 1 }}, data.visible, data.name, data.z_index);
             }},
 
             // ─── Drawing Control (from SDK/API) ───
@@ -2620,6 +2976,10 @@ async def serve_map(map_id: str, request: Request):
                 try {{ map.setProjection({{ type: 'globe' }}); }} catch(e) {{}}
                 enableSky();
             }}
+            // A rebuilt video source makes a new <video>: take it over again.
+            for (const st of Object.values(animLayers)) {{
+                if (st.kind === 'video') {{ st.video = null; attachVideo(st); }}
+            }}
             try {{
                 map.jumpTo({{
                     center: snap.view.center,
@@ -2643,6 +3003,7 @@ async def serve_map(map_id: str, request: Request):
                 if (map.getSource(reg.srcId)) map.removeSource(reg.srcId);
                 delete assetRegistry[id];
             }}
+            teardownAllAnims();
             rebuildMask();   // registry is empty → drops the shared mask layer
             for (const id of Object.keys(deckArcs)) delete deckArcs[id];
             renderDeckArcs();
@@ -2656,7 +3017,13 @@ async def serve_map(map_id: str, request: Request):
             latestLayerZ = snapZ;
             // Restore all assets
             for (const asset of (snapshot.assets || [])) {{
-                if (asset.asset_type && asset.asset_type.startsWith('geotiff_')) {{
+                // Animated rasters first: the generic geotiff_ branch below
+                // would draw them as one still PNG.
+                if (asset.asset_type === 'geotiff_frames' && asset.animation) {{
+                    addFrameStack(asset.asset_id, asset.animation, asset.style || {{}}, asset.visible, asset.name, asset.z_index);
+                }} else if (asset.asset_type === 'geotiff_video') {{
+                    if (asset.animation) addVideoOverlay(asset.asset_id, asset.animation, asset.style || {{}}, asset.visible, asset.name, asset.z_index);
+                }} else if (asset.asset_type && asset.asset_type.startsWith('geotiff_')) {{
                     const imageUrl = '/api/files/' + asset.asset_id + '.png';
                     const geojson = typeof asset.geojson === 'string' ? JSON.parse(asset.geojson) : asset.geojson;
                     const coords = geojson.geometry ? geojson.geometry.coordinates[0] : geojson.coordinates[0];
@@ -3220,7 +3587,7 @@ async def serve_map(map_id: str, request: Request):
                                 console.log('[Screenshot] Data too small, retrying in 1s (attempt', retries + 1, ')');
                                 setTimeout(function() {{
                                     map.triggerRepaint();
-                                    map.once('idle', captureWithRetry);
+                                    onceSettled(captureWithRetry);
                                 }}, 1000);
                             }} catch (e) {{
                                 console.error('[Screenshot] toDataURL error:', e.name, e.message);
@@ -3231,7 +3598,7 @@ async def serve_map(map_id: str, request: Request):
                         if (map.loaded() && map.areTilesLoaded()) {{
                             captureWithRetry();
                         }} else {{
-                            map.once('idle', captureWithRetry);
+                            onceSettled(captureWithRetry);
                         }}
                     }} catch (err) {{
                         ws.send(JSON.stringify({{
@@ -3306,7 +3673,7 @@ async def serve_map(map_id: str, request: Request):
                                             console.log('[Screenshot2] Captured immediately, len:', d.length);
                                             ws.send(JSON.stringify({{ type: 'screenshot_result', correlation_id: correlationId, data: d }}));
                                         }} else {{
-                                            map.once('idle', () => {{
+                                            onceSettled(() => {{
                                                 const d2 = map.getCanvas().toDataURL('image/png');
                                                 console.log('[Screenshot2] Captured after idle, len:', d2.length);
                                                 ws.send(JSON.stringify({{ type: 'screenshot_result', correlation_id: correlationId, data: d2 }}));
@@ -3358,6 +3725,10 @@ async def serve_map(map_id: str, request: Request):
             // Lets the contract suppress hover hit-tests while the user is
             // actively drawing/deleting (mousemove-heavy interactions).
             isDrawing: function () {{ return currentDrawMode !== null || deleteMode; }},
+            // Animated rasters (frame stacks / video): per-viewer playback.
+            // ready() is true once every shown animation has a drawable
+            // first frame (headless screenshots wait on it).
+            animations: {{ state: animationState, ready: animationsReady, toggle: toggleAnim, stillFrame: STILL_FRAME }},
         }};
         try {{ window.dispatchEvent(new CustomEvent('esip:internals-ready')); }} catch (e) {{}}
     </script>

@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS assets (
     z_index INTEGER DEFAULT 0,
     source_url TEXT,
     bbox TEXT,
+    animation TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -111,6 +112,14 @@ async def init_db(config: AppConfig) -> aiosqlite.Connection:
     # Pre-existing rows keep NULL — readers fall back to the full geojson.
     try:
         await _db.execute("ALTER TABLE assets ADD COLUMN bbox TEXT")
+    except aiosqlite.OperationalError:
+        pass  # column already present
+    # assets.animation: JSON playback description of animated rasters
+    # (geotiff_frames / geotiff_video): served file URLs, fps, labels, loop,
+    # autoplay, bounds. Server-owned (not metadata, which callers rewrite);
+    # NULL for every other asset.
+    try:
+        await _db.execute("ALTER TABLE assets ADD COLUMN animation TEXT")
     except aiosqlite.OperationalError:
         pass  # column already present
     await _db.commit()

@@ -167,6 +167,7 @@ It works interactively too — paste it into ChatGPT, Cursor, or Copilot with yo
 | `add_geojson` | Add styled GeoJSON features (polygons, lines, points, glyphs) |
 | `add_arc` | Add a great-circle arc between two points |
 | `add_geotiff` | Upload & render a GeoTIFF raster with a colormap |
+| `add_animation` | Animated raster with play/pause: a GeoTIFF frame stack or a WebM/MP4 video overlay |
 | `zoom` | Fly the camera — to coordinates, bounds, or assets (ballistic animation) |
 | `list_assets` | List everything on a map |
 | `update_style` | Restyle an existing asset |

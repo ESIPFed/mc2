@@ -72,6 +72,7 @@ async def create_asset(
     source_url: str | None = None,
     asset_id: str | None = None,
     visible: bool = True,
+    animation: dict | None = None,
 ) -> AssetResponse:
     """Create a new asset on a map."""
     db = await get_db()
@@ -116,8 +117,8 @@ async def create_asset(
         z_index = row[0] if row else 0
 
     await db.execute(
-        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, bbox, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, bbox, animation, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             asset_id,
             map_id,
@@ -131,6 +132,7 @@ async def create_asset(
             z_index,
             source_url,
             json.dumps(bbox) if bbox else None,
+            json.dumps(animation) if animation else None,
             now,
             now,
         ),
@@ -150,6 +152,7 @@ async def create_asset(
         animated=animated,
         z_index=z_index,
         source_url=source_url,
+        animation=animation,
         created_at=now,
         updated_at=now,
     )
@@ -192,6 +195,17 @@ def _parse_bbox(raw: str | None) -> list[float] | None:
     return bbox if isinstance(bbox, list) and len(bbox) == 4 else None
 
 
+def _parse_animation(row) -> dict | None:
+    raw = row["animation"] if "animation" in row.keys() else None
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _row_to_asset(row, geojson: str | None) -> AssetResponse:
     style = AssetStyle.model_validate_json(row["style"]) if row["style"] else None
     metadata = (
@@ -212,6 +226,7 @@ def _row_to_asset(row, geojson: str | None) -> AssetResponse:
         animated=bool(row["animated"]),
         z_index=row["z_index"] or 0,
         source_url=row["source_url"],
+        animation=_parse_animation(row),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -221,7 +236,7 @@ def _row_to_asset(row, geojson: str | None) -> AssetResponse:
 # geometry strings out of SQLite just to throw them away.
 _SUMMARY_COLUMNS = (
     "id, map_id, name, asset_type, style, metadata, visible, animated, "
-    "z_index, source_url, bbox, created_at, updated_at"
+    "z_index, source_url, bbox, animation, created_at, updated_at"
 )
 
 

@@ -48,6 +48,11 @@ RASTERS & TILES
                                    vmin=0.0, vmax=1.0, alpha=0.7,
                                    nodata=0, name="my layer")
     session.add_tile_layer(url, name="...", opacity=0.8, attribution="...")  # XYZ template
+    # Animations: viewers get play/pause only (no scrubbing/timeline; per viewer)
+    session.add_geotiff_frames(urls, vmin=-3, vmax=3, colormap="RdBu_r",  # 2..240 frames,
+                               fps=4, labels=["2023-06-05", ...])         # one shared grid
+    session.add_video([webm_alpha_url, mp4_url], bounds=[w, s, e, n],     # e may be > 180
+                      poster_url=png_url)                                 # (antimeridian)
     session.remove_tile_layer(asset_id)
 
 STYLE dict keys (all optional)

@@ -37,6 +37,8 @@ class ScreenshotResult:
 _TILES_LOADED_TIMEOUT_MS = 15_000
 # Small settle delay after tiles report loaded so the final frame paints.
 _PAINT_SETTLE_MS = 300
+# Upper bound for an animated raster's first frame (video decode) to be ready.
+_ANIMATIONS_READY_TIMEOUT_MS = 5_000
 
 
 async def take_screenshot_playwright(
@@ -94,6 +96,10 @@ async def take_screenshot_playwright(
             page = await browser.new_page(
                 viewport={"width": width, "height": height},
             )
+            # Animated rasters (frame stacks, video) would make every capture
+            # a different frame: hold them paused on their first frame and
+            # leave out their play/pause control. Set before any page script.
+            await page.add_init_script("window.__ESIP_STILL_FRAME = true;")
             await page.goto(map_url, wait_until="networkidle")
 
             # Deterministic wait: MapLibre knows when it's actually done.
@@ -123,6 +129,18 @@ async def take_screenshot_playwright(
                         }""",
                         timeout=_TILES_LOADED_TIMEOUT_MS,
                     )
+                    # A video overlay's first frame decodes after the map
+                    # reports loaded; wait for it too (bounded, best effort).
+                    try:
+                        await page.wait_for_function(
+                            """() => {
+                                const a = window.__esipInternals && window.__esipInternals.animations;
+                                return !a || a.ready();
+                            }""",
+                            timeout=_ANIMATIONS_READY_TIMEOUT_MS,
+                        )
+                    except Exception:
+                        logger.info("Screenshot wait: animation first frames not ready; capturing anyway")
                     # Tiles are loaded; give the final frame a beat to paint.
                     await page.wait_for_timeout(_PAINT_SETTLE_MS)
                     logger.info("Screenshot wait: tiles loaded (deterministic)")
