@@ -8,8 +8,50 @@ from datetime import datetime, timezone
 
 import httpx
 
+from ..config import load_config
 from ..database import get_db
 from ..models import AssetResponse, AssetStyle, AssetMetadata, AssetUpdate
+
+
+def is_raster_type(asset_type: str) -> bool:
+    return asset_type.startswith("geotiff") or asset_type == "tile_layer"
+
+
+def with_default_style(style: AssetStyle | None, asset_type: str) -> AssetStyle | None:
+    """Materialize the renderer's default colors into a vector asset's style.
+
+    The stored style is what the map draws: a layer manager reading
+    GET /assets must never see ``fill_color: null`` while the map paints the
+    configured default. Only gaps are filled. A masked polygon without an
+    explicit fill keeps ``fill_color`` unset, because the mask's transparent
+    interior is part of its look. Rasters carry no colors.
+    """
+    if is_raster_type(asset_type):
+        return style
+    defaults = load_config().map.style
+    base = style.model_dump(exclude_none=True) if style else {}
+    if "fill_color" not in base and not base.get("mask"):
+        base["fill_color"] = defaults.fill_color
+    base.setdefault("stroke_color", defaults.stroke_color)
+    base.setdefault("stroke_width", float(defaults.stroke_width))
+    return AssetStyle.model_validate(base)
+
+
+def merge_style(base: AssetStyle | None, patch: AssetStyle) -> AssetStyle:
+    """Apply a partial style update to the stored style.
+
+    Keys the caller sent replace stored ones; keys it did not send are kept;
+    an explicit ``null`` clears a key (back to the renderer default). The
+    patch's own ``status`` preset is expanded against the patch alone, then
+    overlaid, which is exactly what live viewers have always shown (a
+    ``status: "done"`` station keeps its fill but gains the success stroke).
+    """
+    merged = base.model_dump(exclude_none=True) if base else {}
+    merged.update(patch.model_dump(exclude_none=True))
+    for key in patch.model_fields_set:
+        if getattr(patch, key) is None:
+            merged.pop(key, None)
+    return AssetStyle.model_validate(merged)
 
 
 def _compute_bbox(geojson: str) -> list[float] | None:
@@ -29,6 +71,7 @@ async def create_asset(
     animated: bool = False,
     source_url: str | None = None,
     asset_id: str | None = None,
+    visible: bool = True,
 ) -> AssetResponse:
     """Create a new asset on a map."""
     db = await get_db()
@@ -36,6 +79,7 @@ async def create_asset(
         asset_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
+    style = with_default_style(style, asset_type)
     style_json = style.model_dump_json() if style else None
     metadata_json = metadata.model_dump_json() if metadata else None
     bbox = _compute_bbox(geojson)
@@ -47,7 +91,7 @@ async def create_asset(
     # bury every polygon — by shifting everything at or above that slot up
     # one. Explicit user reorders are respected afterwards: this only picks
     # the INITIAL slot.
-    is_raster = asset_type.startswith("geotiff") or asset_type == "tile_layer"
+    is_raster = is_raster_type(asset_type)
     min_vector_z = None
     if is_raster:
         cursor = await db.execute(
@@ -73,7 +117,7 @@ async def create_asset(
 
     await db.execute(
         """INSERT INTO assets (id, map_id, name, asset_type, geojson, style, metadata, visible, animated, z_index, source_url, bbox, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             asset_id,
             map_id,
@@ -82,6 +126,7 @@ async def create_asset(
             geojson,
             style_json,
             metadata_json,
+            int(visible),
             int(animated),
             z_index,
             source_url,
@@ -101,7 +146,7 @@ async def create_asset(
         bbox=bbox,
         style=style,
         metadata=metadata,
-        visible=True,
+        visible=visible,
         animated=animated,
         z_index=z_index,
         source_url=source_url,
@@ -221,16 +266,46 @@ async def reorder_assets(map_id: str, asset_ids: list[str]) -> None:
     """Persist a new stacking order.
 
     ``asset_ids`` is ordered TOP-most first (matching a layer-manager list).
-    The first id gets the highest z_index. Assets not mentioned keep their
-    existing z_index (they end up below the reordered set).
+    Listed assets take the top of the stack in that order; any asset not
+    mentioned keeps its relative order BELOW them. Every asset is renumbered
+    0..n-1 (bottom first), so the stored order is total and matches what the
+    live map does with the same list.
     """
     db = await get_db()
+    order = await layer_order(map_id)
+    listed = [aid for aid in dict.fromkeys(reversed(asset_ids)) if aid in order]
+    rest = [aid for aid in order if aid not in set(listed)]
+    await _write_order(map_id, rest + listed)
+
+
+async def layer_order(map_id: str) -> list[str]:
+    """Asset ids in stacking order, bottom-most first (the GET /assets order)."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
+        (map_id,),
+    )
+    return [row["id"] for row in await cursor.fetchall()]
+
+
+async def layer_z(map_id: str) -> dict[str, int]:
+    """Every asset's stored z_index. Broadcast with each change that moves
+    any asset, so live viewers adopt the server's numbers instead of keeping
+    their own (a raster insert shifts every vector above it)."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, z_index FROM assets WHERE map_id = ?", (map_id,)
+    )
+    return {row["id"]: row["z_index"] or 0 for row in await cursor.fetchall()}
+
+
+async def _write_order(map_id: str, order: list[str]) -> None:
+    db = await get_db()
     now = datetime.now(timezone.utc).isoformat()
-    n = len(asset_ids)
-    for i, aid in enumerate(asset_ids):
+    for z, aid in enumerate(order):
         await db.execute(
             "UPDATE assets SET z_index = ?, updated_at = ? WHERE id = ? AND map_id = ?",
-            (n - i, now, aid, map_id),
+            (z, now, aid, map_id),
         )
     await db.commit()
 
@@ -242,12 +317,7 @@ async def move_asset(map_id: str, asset_id: str, position: str) -> None:
     reloads — move_layer used to be broadcast-only, and the next snapshot or
     layer-manager poll silently snapped the stack back.
     """
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT id FROM assets WHERE map_id = ? ORDER BY z_index ASC, created_at ASC",
-        (map_id,),
-    )
-    order = [row["id"] for row in await cursor.fetchall()]
+    order = await layer_order(map_id)
     if asset_id not in order:
         return
     idx = order.index(asset_id)
@@ -262,13 +332,7 @@ async def move_asset(map_id: str, asset_id: str, position: str) -> None:
         order.insert(max(idx - 1, 0), asset_id)
     else:
         return
-    now = datetime.now(timezone.utc).isoformat()
-    for z, aid in enumerate(order):
-        await db.execute(
-            "UPDATE assets SET z_index = ?, updated_at = ? WHERE id = ? AND map_id = ?",
-            (z, now, aid, map_id),
-        )
-    await db.commit()
+    await _write_order(map_id, order)
 
 
 async def update_asset(
@@ -285,8 +349,18 @@ async def update_asset(
         updates.append("name = ?")
         params.append(update.name)
     if update.style is not None:
+        # Merge, never replace: live viewers apply a partial style on top of
+        # what they draw, so replacing here made a reload lose every key the
+        # caller didn't resend.
+        cursor = await db.execute(
+            "SELECT style FROM assets WHERE id = ? AND map_id = ?", (asset_id, map_id)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        stored = AssetStyle.model_validate_json(row["style"]) if row["style"] else None
         updates.append("style = ?")
-        params.append(update.style.model_dump_json())
+        params.append(merge_style(stored, update.style).model_dump_json(exclude_none=True))
     if update.visible is not None:
         updates.append("visible = ?")
         params.append(int(update.visible))

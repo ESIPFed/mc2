@@ -129,7 +129,12 @@ async def test_rest_patch_replaces_inspector_namespace_and_notifies(map_client):
     assert "status" not in updated["metadata"]["extra"]["inspector"]
     socket.send_text.assert_awaited_once()
     message = json.loads(socket.send_text.call_args.args[0])
-    assert message == {"type": "asset_updated", "data": updated}
+    # The broadcast is the stored asset minus its (unchangeable, possibly
+    # multi-MB) geometry, with the complete style flagged as such.
+    expected = {k: v for k, v in updated.items() if k != "geojson"}
+    expected["style"] = {k: v for k, v in (updated["style"] or {}).items() if v is not None}
+    expected["full"] = True
+    assert message == {"type": "asset_updated", "data": expected}
 
 
 async def test_metadata_can_clear_text_and_disable_inspector(map_client):
@@ -176,7 +181,7 @@ async def test_rest_delete_notifies_viewers_and_missing_asset_does_not(map_clien
     assert response.status_code == 204
     socket.send_text.assert_awaited_once()
     assert json.loads(socket.send_text.call_args.args[0]) == {
-        "type": "delete_asset", "data": {"asset_id": asset_id},
+        "type": "delete_asset", "data": {"asset_id": asset_id, "layer_z": {}},
     }
     socket.reset_mock()
     response = await client.delete(f"/api/maps/{map_id}/assets/{asset_id}")

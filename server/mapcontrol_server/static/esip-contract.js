@@ -184,7 +184,8 @@
       "add_arc",
       "add_geotiff_rgb", "add_geotiff_singleband", "add_tile_layer",
       "add_drawn_polygon", "delete_asset", "remove_tile_layer",
-      "update_style", "set_opacity", "move_layer", "update_metadata", "asset_updated",
+      "update_style", "set_opacity", "move_layer", "reorder_assets",
+      "update_metadata", "asset_updated",
     ];
     CHANGE_EVENTS.forEach(function (name) {
       decorate(name, function (data) {

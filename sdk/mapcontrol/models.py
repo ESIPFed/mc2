@@ -124,6 +124,10 @@ class Asset:
     metadata: Metadata | None = None
     visible: bool = True
     animated: bool = False
+    # Stacking slot: higher draws on top. list_assets() is ordered by it,
+    # bottom-most first.
+    z_index: int = 0
+    bbox: list[float] | None = None
     source_url: str | None = None
     created_at: str = ""
     updated_at: str = ""

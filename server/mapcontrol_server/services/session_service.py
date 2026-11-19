@@ -413,32 +413,11 @@ async def get_session_snapshot(map_id: str, user_session_id: str) -> SessionSnap
     )
     rows = await cursor.fetchall()
 
-    assets = []
-    for row in rows:
-        style = None
-        if row["style"]:
-            style = AssetStyle.model_validate_json(row["style"])
-
-        metadata = None
-        if row["metadata"]:
-            metadata = AssetMetadata.model_validate_json(row["metadata"])
-
-        assets.append(
-            AssetResponse(
-                asset_id=row["id"],
-                map_id=row["map_id"],
-                name=row["name"],
-                asset_type=row["asset_type"],
-                geojson=row["geojson"],
-                style=style,
-                metadata=metadata,
-                visible=bool(row["visible"]),
-                animated=bool(row["animated"]),
-                source_url=row["source_url"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-        )
+    # The same row mapping as GET /assets: the snapshot used to drop
+    # z_index (every restored asset sat at 0, so later live inserts slotted
+    # against a flat stack) and bbox.
+    from .asset_service import _row_to_asset
+    assets = [_row_to_asset(row, row["geojson"]) for row in rows]
 
     # Get viewport for this session — use config defaults (not hardcoded "osm"/"2d")
     from ..config import load_config

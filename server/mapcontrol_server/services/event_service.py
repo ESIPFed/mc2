@@ -107,6 +107,34 @@ def _build_arc_geojson(data: dict) -> str:
     )
 
 
+def _normalize_opacity(value) -> float | None:
+    """0..1, or a 0..100 percentage (the SDK and tools have always accepted
+    both). None/garbage → None."""
+    try:
+        op = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(op):
+        return None
+    if op > 1:
+        op = op / 100
+    return min(1.0, max(0.0, op))
+
+
+def _stored_style(asset) -> dict:
+    """The style a viewer must draw: the stored (status-expanded, defaulted)
+    value, not the raw request."""
+    return asset.style.model_dump(exclude_none=True) if asset.style else {}
+
+
+Z_EVENTS = {
+    "add_polygon", "add_path", "add_point", "add_arc",
+    "add_polygon_url", "add_path_url", "add_tile_layer",
+    "add_geotiff_rgb", "add_geotiff_singleband",
+    "reorder_assets", "move_layer", "delete_asset", "remove_tile_layer",
+}
+
+
 async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
     """Process an incoming map event: persist it, handle side effects, broadcast."""
     db = await get_db()
@@ -178,12 +206,15 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
             style=style,
             metadata=metadata,
             animated=event.data.get("animated", False),
+            visible=event.data.get("visible", True) is not False,
         )
         asset_id = asset.asset_id
         # Enrich the broadcast with the assigned asset_id and canonical
         # stacking slot (clients insert by z_index, not arrival order).
         event.data["asset_id"] = asset_id
         event.data["z_index"] = asset.z_index
+        event.data["style"] = _stored_style(asset)
+        event.data["visible"] = asset.visible
 
     elif event.type == "add_arc":
         # Arc glyph: server tessellates a great-circle LineString between two
@@ -238,8 +269,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         event.data["z_index"] = asset.z_index
         event.data["geojson"] = arc_geojson
         event.data["name"] = arc_name
-        if style is not None:
-            event.data["style"] = style.model_dump(exclude_none=True)
+        event.data["style"] = _stored_style(asset)
 
     elif event.type in ("add_polygon_url", "add_path_url"):
         style = AssetStyle(**event.data["style"]) if "style" in event.data else None
@@ -263,6 +293,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         event.data["asset_id"] = asset_id
         event.data["z_index"] = asset.z_index
         event.data["geojson"] = asset.geojson
+        event.data["style"] = _stored_style(asset)
 
     elif event.type == "delete_asset":
         target_id = event.data.get("asset_id")
@@ -271,16 +302,24 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
 
     elif event.type == "add_tile_layer":
         # Create a lightweight asset to track the tile layer
+        opacity = _normalize_opacity(event.data.get("opacity", 1.0))
         asset = await asset_service.create_asset(
             map_id=map_id,
             asset_type="tile_layer",
             geojson="{}",  # tile layers don't have geometry
             name=event.data.get("name", "Tile Layer"),
             source_url=event.data.get("url", ""),
+            # Opacity lives in style.opacity like every other asset's, so a
+            # reload draws what the live map drew.
+            style=AssetStyle(opacity=1.0 if opacity is None else opacity),
+            visible=event.data.get("visible", True) is not False,
         )
         asset_id = asset.asset_id
         event.data["asset_id"] = asset_id
         event.data["z_index"] = asset.z_index
+        event.data["style"] = _stored_style(asset)
+        event.data["opacity"] = asset.style.opacity
+        event.data["visible"] = asset.visible
 
     elif event.type == "remove_tile_layer":
         target_id = event.data.get("asset_id")
@@ -324,17 +363,44 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         style_data = event.data.get("style", {})
         if target_id:
             style = AssetStyle(**style_data)
-            await asset_service.update_asset(
+            asset = await asset_service.update_asset(
                 map_id, target_id, AssetUpdate(style=style)
             )
-            # Broadcast the EXPANDED style so clients receive concrete
-            # animate/opacity/color fields — style.status is server-side
-            # sugar (see AssetStyle._expand_status); the frontend only
-            # understands the concrete fields. exclude_unset keeps the
-            # partial-update semantics (only caller-touched + preset-filled
-            # fields travel), so e.g. an opacity-only update can't clobber
-            # colors.
-            event.data["style"] = style.model_dump(exclude_none=True)
+            if asset is None:
+                return MapEventResponse(
+                    event_id=event_id, type=event.type, created_at=now,
+                    error="Asset not found",
+                )
+            asset_id = asset.asset_id
+            # The update is merged into the stored style; broadcast the
+            # COMPLETE result (status presets expanded) so every viewer draws
+            # exactly what a reload would. `full` tells viewers this is the
+            # whole style, not a patch: keys absent here are unset.
+            event.data["style"] = _stored_style(asset)
+            event.data["full"] = True
+
+    elif event.type == "set_opacity":
+        # Sugar for update_style {opacity}. It used to be broadcast-only, so
+        # every opacity slider and agent call was lost on the next reload.
+        target_id = event.data.get("asset_id")
+        opacity = _normalize_opacity(event.data.get("opacity"))
+        if not target_id or opacity is None:
+            return MapEventResponse(
+                event_id=event_id, type=event.type, created_at=now,
+                error="set_opacity requires 'asset_id' and a numeric 'opacity'",
+            )
+        asset = await asset_service.update_asset(
+            map_id, target_id, AssetUpdate(style=AssetStyle(opacity=opacity))
+        )
+        if asset is None:
+            return MapEventResponse(
+                event_id=event_id, type=event.type, created_at=now,
+                error="Asset not found",
+            )
+        asset_id = asset.asset_id
+        event.data["opacity"] = opacity
+        event.data["style"] = _stored_style(asset)
+        event.data["full"] = True
 
     elif event.type == "update_metadata":
         target_id = event.data["asset_id"]
@@ -434,6 +500,7 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
                 style=item_style,
                 metadata=item_metadata,
                 animated=item.get("animated", False),
+                visible=item.get("visible", True) is not False,
             )
             created_asset_ids.append(asset.asset_id)
 
@@ -444,8 +511,10 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
                 "data": {
                     "asset_id": asset.asset_id,
                     "z_index": asset.z_index,
+                    "layer_z": await asset_service.layer_z(map_id),
                     "geojson": item.get("geojson", ""),
-                    **({"style": item["style"]} if "style" in item else {}),
+                    "style": _stored_style(asset),
+                    "visible": asset.visible,
                     **({"name": item["name"]} if "name" in item else {}),
                     **({"metadata": item["metadata"]} if "metadata" in item else {}),
                 },
@@ -471,7 +540,9 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         config = load_config()
         source = event.data.get("url", "")
         name = event.data.get("name")
-        alpha = event.data.get("alpha", 1.0)
+        alpha = _normalize_opacity(event.data.get("alpha", 1.0))
+        if alpha is None:
+            alpha = 1.0
         nodata = event.data.get("nodata")
 
         # Generate asset ID early so we can use it for the PNG filename
@@ -523,6 +594,10 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
             name=name or f"GeoTIFF ({mode})",
             source_url=source,
             asset_id=asset_id,
+            # `alpha` is the layer's opacity: stored, so a reload (and every
+            # layer manager) sees the value the live map draws.
+            style=AssetStyle(opacity=alpha),
+            visible=event.data.get("visible", True) is not False,
         )
 
         # Enrich event data for broadcast
@@ -534,6 +609,15 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         event.data["height"] = result.height
         event.data["crs"] = result.crs
         event.data["band_count"] = result.band_count
+        event.data["alpha"] = alpha
+        event.data["style"] = _stored_style(asset)
+        event.data["visible"] = asset.visible
+
+    # Every change that can move ANY asset's slot carries the full stored
+    # z map: a raster insert shifts every vector above it, and viewers that
+    # kept their own numbering drifted from the DB until the next reload.
+    if event.type in Z_EVENTS:
+        event.data["layer_z"] = await asset_service.layer_z(map_id)
 
     # Update map's updated_at
     await db.execute(

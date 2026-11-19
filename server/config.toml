@@ -180,6 +180,6 @@ center_lat = 20.0
 zoom = 1.5
 
 [map.style]
-fill_color = "#3388ff40"
+fill_color = "#3388ff20"
 stroke_color = "#3388ff"
 stroke_width = 2

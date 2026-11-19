@@ -6,7 +6,8 @@ import tempfile
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from mapcontrol_server.main import app, lifespan
+from mapcontrol_server.main import app
+from tests._harness import db_lifespan as lifespan
 
 
 @pytest_asyncio.fixture

@@ -81,7 +81,7 @@ class MapDefaultsConfig:
 
 @dataclass
 class MapStyleConfig:
-    fill_color: str = "#3388ff40"
+    fill_color: str = "#3388ff20"
     stroke_color: str = "#3388ff"
     stroke_width: int = 2
 
