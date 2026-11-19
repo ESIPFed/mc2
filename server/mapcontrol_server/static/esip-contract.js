@@ -182,7 +182,8 @@
     var CHANGE_EVENTS = [
       "add_polygon", "add_polygon_url", "add_path", "add_path_url", "add_point",
       "add_arc",
-      "add_geotiff_rgb", "add_geotiff_singleband", "add_tile_layer",
+      "add_geotiff_rgb", "add_geotiff_singleband", "add_geotiff_frames",
+      "add_video", "add_tile_layer",
       "add_drawn_polygon", "delete_asset", "remove_tile_layer",
       "update_style", "set_opacity", "move_layer", "reorder_assets",
       "update_metadata", "asset_updated",

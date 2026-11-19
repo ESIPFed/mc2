@@ -211,6 +211,11 @@
   // visual. (Public file route; no new server work.)
   function rasterThumb(asset) {
     var t = (asset.asset_type || "").toLowerCase();
+    if (t === "geotiff_video") {
+      // A video only has a still when the caller sent a poster.
+      var poster = asset.animation && asset.animation.poster_url;
+      return poster ? M.config.baseUrl + poster : null;
+    }
     if (t.indexOf("geotiff") === 0) {
       return M.config.baseUrl + "/api/files/" + asset.asset_id + ".png";
     }

@@ -245,6 +245,12 @@ class AssetResponse(BaseModel):
     animated: bool = False
     z_index: int = 0
     source_url: str | None = None
+    # Playback description of an animated raster, None for everything else.
+    # geotiff_frames: {kind: "frames", frame_urls, frame_count, fps, labels,
+    #   loop, autoplay, bounds}; geotiff_video: {kind: "video", video_urls,
+    #   poster_url, loop, autoplay, bounds}. URLs are server-relative
+    #   (/api/files/...). Play state itself is per viewer, never stored.
+    animation: dict[str, Any] | None = None
     created_at: str
     updated_at: str
 

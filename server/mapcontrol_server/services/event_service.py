@@ -20,7 +20,9 @@ from ..models import (
 )
 from ..websocket import manager
 from . import asset_service
+from . import animation_service
 from . import geotiff_service
+from .animation_service import AnimationError
 from .geotiff_service import GeoTIFFError, _bounds_to_geojson_polygon
 
 
@@ -131,6 +133,7 @@ Z_EVENTS = {
     "add_polygon", "add_path", "add_point", "add_arc",
     "add_polygon_url", "add_path_url", "add_tile_layer",
     "add_geotiff_rgb", "add_geotiff_singleband",
+    "add_geotiff_frames", "add_video",
     "reorder_assets", "move_layer", "delete_asset", "remove_tile_layer",
 }
 
@@ -178,6 +181,18 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         return MapEventResponse(
             event_id=event_id, type=event.type, created_at=now,
             error=f"Invalid metadata: {detail}",
+        )
+
+    # Animated rasters: reject bad parameters before anything is written.
+    animation_params = None
+    try:
+        if event.type == "add_geotiff_frames":
+            animation_params = animation_service.validate_frames(event.data)
+        elif event.type == "add_video":
+            animation_params = animation_service.validate_video(event.data)
+    except AnimationError as exc:
+        return MapEventResponse(
+            event_id=event_id, type=event.type, created_at=now, error=str(exc),
         )
 
     # Persist the event
@@ -612,6 +627,124 @@ async def process_event(map_id: str, event: MapEvent) -> MapEventResponse:
         event.data["alpha"] = alpha
         event.data["style"] = _stored_style(asset)
         event.data["visible"] = asset.visible
+
+    # ─── Animated rasters (frame stack / video) ─────────────────────────
+    # Play/pause only: playback state is per viewer and never stored. What
+    # IS stored (assets.animation) is everything a reload needs to rebuild
+    # the layer: served file URLs, fps, labels, loop, autoplay, bounds.
+    elif event.type == "add_geotiff_frames":
+        params = animation_params
+        config = load_config()
+        alpha = _normalize_opacity(event.data.get("alpha", 1.0))
+        if alpha is None:
+            alpha = 1.0
+        asset_id = str(uuid.uuid4())
+        try:
+            results, frame_urls = await animation_service.render_frames(
+                params, asset_id, config
+            )
+        except AnimationError as exc:
+            return MapEventResponse(
+                event_id=event_id, type=event.type, asset_id=None,
+                created_at=now, error=str(exc),
+            )
+        first = results[0]
+        animation = {
+            "kind": "frames",
+            "frame_urls": frame_urls,
+            "frame_count": len(frame_urls),
+            "fps": params.fps,
+            "labels": params.labels,
+            "loop": params.loop,
+            "autoplay": params.autoplay,
+            "bounds": first.bounds,
+        }
+        name = event.data.get("name") or "GeoTIFF frames"
+        asset = await asset_service.create_asset(
+            map_id=map_id,
+            asset_type="geotiff_frames",
+            geojson=json.dumps(_bounds_to_geojson_polygon(first.bounds)),
+            name=name,
+            # Exactly as given: embedders read query params (e.g. a legend
+            # id) off the source URL.
+            source_url=params.urls[0],
+            asset_id=asset_id,
+            style=AssetStyle(opacity=alpha),
+            visible=event.data.get("visible", True) is not False,
+            animation=animation,
+        )
+        event.data.update({
+            "asset_id": asset_id,
+            "z_index": asset.z_index,
+            "name": name,
+            "image_url": frame_urls[0],
+            "frame_urls": frame_urls,
+            "bounds": first.bounds,
+            "width": first.width,
+            "height": first.height,
+            "crs": first.crs,
+            "fps": params.fps,
+            "labels": params.labels,
+            "loop": params.loop,
+            "autoplay": params.autoplay,
+            "alpha": alpha,
+            "style": _stored_style(asset),
+            "visible": asset.visible,
+        })
+
+    elif event.type == "add_video":
+        params = animation_params
+        config = load_config()
+        alpha = _normalize_opacity(event.data.get("alpha", 1.0))
+        if alpha is None:
+            alpha = 1.0
+        asset_id = str(uuid.uuid4())
+        try:
+            video_urls, poster_url = await animation_service.store_video(
+                params, asset_id, config
+            )
+        except AnimationError as exc:
+            return MapEventResponse(
+                event_id=event_id, type=event.type, asset_id=None,
+                created_at=now, error=str(exc),
+            )
+        animation = {
+            "kind": "video",
+            "video_urls": video_urls,
+            "poster_url": poster_url,
+            "loop": params.loop,
+            "autoplay": params.autoplay,
+            "bounds": params.bounds,
+        }
+        name = event.data.get("name") or "Video"
+        asset = await asset_service.create_asset(
+            map_id=map_id,
+            # geotiff_* on purpose: embedders treat the prefix as "raster
+            # overlay" (legend, thumbnail, stacking below vectors).
+            asset_type="geotiff_video",
+            # East may exceed 180 (antimeridian): stored as given so bbox and
+            # zoom-to-fit keep the overlay contiguous.
+            geojson=json.dumps(_bounds_to_geojson_polygon(params.bounds)),
+            name=name,
+            source_url=params.urls[0],
+            asset_id=asset_id,
+            style=AssetStyle(opacity=alpha),
+            visible=event.data.get("visible", True) is not False,
+            animation=animation,
+        )
+        event.data.update({
+            "asset_id": asset_id,
+            "z_index": asset.z_index,
+            "name": name,
+            "video_urls": video_urls,
+            "poster_url": poster_url,
+            "bounds": params.bounds,
+            "loop": params.loop,
+            "autoplay": params.autoplay,
+            "alpha": alpha,
+            "style": _stored_style(asset),
+            "visible": asset.visible,
+        })
 
     # Every change that can move ANY asset's slot carries the full stored
     # z map: a raster insert shifts every vector above it, and viewers that

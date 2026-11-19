@@ -21,6 +21,12 @@ The served map page publishes two hooks the moment it is ready (see
 | `window.ESIPMap` | the **public command surface** | basemap, visibility, `zoomToAssets`, reading the asset registry |
 | `esip:ready` event | fired once the contract is live | knowing when the hooks exist |
 
+Animated rasters (`add_geotiff_frames` / `add_video`) play on their own. For deterministic
+frames, load the map with `?animate=0` (every animation held paused on its first frame, no
+play/pause control; the server's headless screenshots do the same). While a video overlay
+plays, MapLibre never reports `map.loaded()` / `idle`, so wait on `map.isStyleLoaded()` or
+`window.__esipInternals.animations.ready()` instead.
+
 Because animation just calls MapLibre's own camera methods, everything MapLibre supports
 is available — including the smooth van Wijk `flyTo` and 3D globe + terrain (the same
 terrain/sky path fixed in the server shell).

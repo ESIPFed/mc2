@@ -64,8 +64,12 @@ class MapSession:
 
     # ─── Events (Internal) ───────────────────────────────────────────────────
 
-    def _send_event(self, event_type: str, data: dict[str, Any]) -> EventResult:
-        """Send an event to the map."""
+    def _send_event(
+        self, event_type: str, data: dict[str, Any], timeout: float | None = None,
+    ) -> EventResult:
+        """Send an event to the map. ``timeout`` overrides the client's default
+        for events the server works on for a long time (frame stacks, video)."""
+        extra: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
         resp = self._client.post(
             f"{self.api_base}/events",
             json={
@@ -73,6 +77,7 @@ class MapSession:
                 "data": _sanitize_floats(data),
                 "user_session_id": self.user_session_id,
             },
+            **extra,
         )
         if resp.status_code >= 400:
             detail = resp.text
@@ -371,6 +376,56 @@ class MapSession:
         if percentile_max is not None: data["percentile_max"] = percentile_max
         if nodata is not None: data["nodata"] = nodata
         return self._send_event("add_geotiff_singleband", data)
+
+    # ─── Animated rasters (play/pause only) ──────────────────────────────────
+
+    def add_geotiff_frames(
+        self, urls: list[str], *, vmin: float, vmax: float, colormap: str = "viridis",
+        name: str | None = None, fps: float = 4.0, labels: list[str] | None = None,
+        band: int = 1, nodata: float | None = None, alpha: float = 1.0,
+        loop: bool = True, autoplay: bool = True,
+    ) -> EventResult:
+        """Overlay a stack of single-band GeoTIFF frames played as an animation.
+
+        ``urls`` (2..240, in play order) are rendered like
+        :meth:`add_geotiff_singleband` with ONE fixed ``vmin``/``vmax`` so
+        colours mean the same in every frame; all frames must share one grid.
+        ``fps`` is clamped to 0.25..30. ``labels`` (optional, one per frame,
+        <= 80 chars, e.g. dates) is shown beside the map's play/pause button.
+        Viewers get play/pause only; play state is per viewer.
+        """
+        data: dict[str, Any] = {
+            "urls": list(urls), "vmin": vmin, "vmax": vmax, "colormap": colormap,
+            "band": band, "fps": fps, "loop": loop, "autoplay": autoplay,
+        }
+        if name: data["name"] = name
+        if labels is not None: data["labels"] = list(labels)
+        if nodata is not None: data["nodata"] = nodata
+        if alpha != 1.0: data["alpha"] = alpha
+        # The server renders every frame before answering.
+        return self._send_event("add_geotiff_frames", data, timeout=max(60.0, 3.0 * len(data["urls"])))
+
+    def add_video(
+        self, urls: list[str], bounds: list[float], *, poster_url: str | None = None,
+        name: str | None = None, alpha: float = 1.0, loop: bool = True,
+        autoplay: bool = True,
+    ) -> EventResult:
+        """Overlay a pre-encoded video placed by its corners (MapLibre video source).
+
+        ``urls``: 1..3 encodings in browser preference order, e.g.
+        ``[webm_vp9_alpha, mp4_h264]`` (WebM/Matroska or MP4 only; checked by
+        magic bytes). ``bounds``: [west, south, east, north] EPSG:4326 of the
+        Web-Mercator-gridded video; ``east`` may exceed 180 for an overlay
+        crossing the antimeridian. ``poster_url``: optional PNG/JPEG first
+        frame, used as the layer's thumbnail. Viewers get play/pause only.
+        """
+        data: dict[str, Any] = {
+            "urls": list(urls), "bounds": list(bounds), "loop": loop, "autoplay": autoplay,
+        }
+        if poster_url: data["poster_url"] = poster_url
+        if name: data["name"] = name
+        if alpha != 1.0: data["alpha"] = alpha
+        return self._send_event("add_video", data, timeout=300.0)
 
     # ─── Zoom ────────────────────────────────────────────────────────────────
 

@@ -104,7 +104,7 @@ HEADERS = {
 }
 
 EXPECTED_TOOLS = {
-    "create_map", "add_geojson", "add_arc", "add_geotiff", "zoom",
+    "create_map", "add_geojson", "add_arc", "add_geotiff", "add_animation", "zoom",
     "list_assets", "delete_asset", "set_visibility", "update_style",
     "set_basemap", "set_theme", "get_viewport", "take_screenshot",
     "show_map",
